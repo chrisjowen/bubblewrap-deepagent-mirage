@@ -17,3 +17,8 @@ wheels/
 
 # Workspace data (mirrored from S3 / local personal files)
 workspace/
+
+# AgentCore deploy artifacts + AWS account-specific state
+ada/agentcore/ada.zip
+ada/agentcore/.cli/deployed-state.json
+ada/agentcore/aws-targets.json

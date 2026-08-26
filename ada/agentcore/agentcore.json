@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.agentcore.aws.dev/v1/agentcore.json",
+  "name": "ada",
+  "version": 1,
+  "managedBy": "CDK",
+  "tags": {
+    "agentcore:created-by": "agentcore-cli",
+    "agentcore:project-name": "ada"
+  },
+  "runtimes": [
+    {
+      "name": "ada",
+      "build": "CodeZip",
+      "entrypoint": "main.py",
+      "codeLocation": "app/ada/",
+      "runtimeVersion": "PYTHON_3_12",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP",
+      "instrumentation": { "enableOtel": false },
+      "envVars": [
+        { "name": "S3_BUCKET", "value": "mirage-test-chris" },
+        { "name": "S3_REGION", "value": "ap-southeast-1" },
+        { "name": "S3_KEY_PREFIX", "value": "chris" },
+        { "name": "SANDBOX_DIR", "value": "/tmp/sandbox" }
+      ]
+    }
+  ],
+  "memories": [],
+  "knowledgeBases": [],
+  "credentials": [
+    {
+      "authorizerType": "ApiKeyCredentialProvider",
+      "name": "anthropic"
+    }
+  ],
+  "evaluators": [],
+  "onlineEvalConfigs": [],
+  "agentCoreGateways": [],
+  "policyEngines": [],
+  "configBundles": [],
+  "abTests": [],
+  "harnesses": [],
+  "datasets": [],
+  "payments": []
+}

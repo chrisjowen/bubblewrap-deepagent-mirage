@@ -11,7 +11,7 @@ from langchain.chat_models import init_chat_model
 from deepagents import create_deep_agent
 from mirage.resource.s3 import S3Config, S3Resource
 
-from runtime import MirageSandboxBackend
+from runtime import BwrapBackend, MirageSandboxBackend
 
 S3_BUCKET = "mirage-test-chris"
 S3_REGION = "ap-southeast-1"
@@ -35,11 +35,13 @@ def build_agent(key_prefix: str):
         model="anthropic:claude-sonnet-4-5-20250929",
         temperature=0.0,
     )
+    sandbox_dir = str(SANDBOX_SCRATCH)
     backend = MirageSandboxBackend(
         resource=S3Resource(
             S3Config(bucket=S3_BUCKET, region=S3_REGION, key_prefix=key_prefix)
         ),
-        sandbox_dir=str(SANDBOX_SCRATCH),
+        sandbox=BwrapBackend(root_dir=sandbox_dir),
+        sandbox_dir=sandbox_dir,
     )
     return create_deep_agent(
         model=model,

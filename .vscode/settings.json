@@ -1,0 +1,16 @@
+{
+    "python.defaultInterpreterPath": "${workspaceFolder}/ada/app/ada/.venv/bin/python",
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}/ada/app/ada",
+        "${workspaceFolder}/ada/app/ada/.venv/lib/python3.12/site-packages"
+    ],
+    "cSpell.words": [
+        "agentcore",
+        "astream",
+        "bedrock",
+        "checkpointer",
+        "deepagents",
+        "langgraph",
+        "mirage"
+    ]
+}
