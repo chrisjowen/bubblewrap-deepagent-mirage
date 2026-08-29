@@ -49,7 +49,7 @@ def _build_workspace(user: UserSpec, runtime_specs: dict) -> Workspace:
     mount_path = f"/{user.mount_name.strip('/')}"
     return Workspace(
         {mount_path: resource},
-        mode=MountMode.WRITE,
+        mode=MountMode.EXEC,
         cache=CacheConfig(type=CacheType.RAM, limit="512MB"),
         index=IndexConfig(type=IndexType.RAM, ttl=600),
         runtimes=[runtime],

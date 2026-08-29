@@ -1,10 +1,11 @@
-from pydantic import BaseModel, Field
+from dataclasses import dataclass
+
+from mirage.runtime.config import RuntimeConfig
 
 
-class CodeInterpreterConfig(BaseModel):
-    region: str
-    code_interpreter_identifier: str = Field(
-        description="ARN or built-in ID of a code interpreter created via bedrock-agentcore-control.",
-    )
-    session_timeout_seconds: int = Field(default=900, gt=0)
+@dataclass(frozen=True, slots=True)
+class CodeInterpreterConfig(RuntimeConfig):
+    region: str = "us-east-1"
+    code_interpreter_identifier: str = "aws.codeinterpreter.v1"
+    session_timeout_seconds: int = 900
     session_name: str | None = None

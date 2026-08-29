@@ -22,8 +22,6 @@ class CodeInterpreterPython(PythonRuntime):
         script=None,
     ) -> None:
         super().__init__(captures, config, script)
-        if isinstance(self.config, dict):
-            self.config = CodeInterpreterConfig(**self.config)
         self._engine = CodeInterpreterEngine(self.config)
         self._engine.open()
 

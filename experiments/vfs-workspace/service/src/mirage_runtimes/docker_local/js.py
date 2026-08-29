@@ -22,8 +22,6 @@ class MountLocalJs(JsRuntime):
         script=None,
     ) -> None:
         super().__init__(captures, config, script)
-        if isinstance(self.config, dict):
-            self.config = DockerLocalConfig(**self.config)
         self._engine = DockerLocalEngine(self.config)
         self._engine.start()
 
