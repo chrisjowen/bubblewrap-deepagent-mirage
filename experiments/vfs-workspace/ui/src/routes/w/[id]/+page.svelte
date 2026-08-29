@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import { api } from '$lib/api';
 	import FileTree from '$lib/components/FileTree.svelte';
-	import ExecPane from '$lib/components/ExecPane.svelte';
+	import ChatPane from '$lib/components/ChatPane.svelte';
 
 	const id = $derived(page.params.id ?? '');
 
@@ -57,9 +57,9 @@
 		{/if}
 	</section>
 
-	<section class="col-span-4 rounded border border-neutral-800 p-3">
+	<section class="col-span-4 rounded border border-neutral-800 p-3 flex flex-col" style="height: calc(100vh - 12rem)">
 		{#if runtime}
-			<ExecPane workspaceId={id} {runtime} />
+			<ChatPane workspaceId={id} />
 		{:else}
 			<div class="text-xs opacity-50">Waiting for workspace…</div>
 		{/if}

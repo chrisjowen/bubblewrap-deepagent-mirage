@@ -34,6 +34,7 @@ dev-vfs: check-aws check-ports vfs-image vfs-config vfs-deps ## boot vfs-workspa
 	     uv run uvicorn workspace_service.main:app \
 	         --reload --port $(VFS_SERVICE_PORT) --host 127.0.0.1 ) & \
 	 ( cd $(VFS_UI) && PUBLIC_API_BASE=http://127.0.0.1:$(VFS_SERVICE_PORT) \
+	     ANTHROPIC_API_KEY="$$ANTHROPIC_API_KEY" CHAT_MODEL="$${CHAT_MODEL:-claude-opus-4-7}" \
 	     pnpm dev --port $(VFS_UI_PORT) ) & \
 	 wait
 
@@ -74,6 +75,7 @@ vfs-service: check-aws check-service-port vfs-config vfs-deps ## run just the se
 .PHONY: vfs-ui
 vfs-ui: check-ui-port vfs-deps ## run just the ui
 	@cd $(VFS_UI) && PUBLIC_API_BASE=http://127.0.0.1:$(VFS_SERVICE_PORT) \
+	    ANTHROPIC_API_KEY="$$ANTHROPIC_API_KEY" CHAT_MODEL="$${CHAT_MODEL:-claude-opus-4-7}" \
 	    pnpm dev --port $(VFS_UI_PORT)
 
 .PHONY: vfs-test
