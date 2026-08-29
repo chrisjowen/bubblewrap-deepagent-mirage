@@ -13,5 +13,6 @@ runtimes:
     image: mirage-runtime:latest
     aws_env_forwarding: true
   code-interpreter:
-    agentcore_region: us-east-1
+    region: us-east-1
+    code_interpreter_identifier: aws.codeinterpreter.v1
     session_timeout_seconds: 900
