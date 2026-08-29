@@ -1,31 +1,19 @@
 """Bootstrap AWS resources for AgentCore CodeInterpreter with S3 Files mount.
 
-Creates (or reuses if named args match):
-  1. IAM execution role with s3files + agent-core permissions
-  2. S3 Files file system, mount target in the given subnet, access point
-     rooted at the S3 bucket prefix
-  3. AgentCore custom code interpreter with networkMode=VPC and
-     filesystemConfigurations pointing at the S3 Files access point
+Idempotent — reruns reuse resources named after --name.
 
-Prints yaml snippet to paste into service/workspaces.yaml under
-runtimes.code-interpreter.
+Creates:
+  1. IAM role for S3 Files service (reads/writes the backing S3 bucket)
+  2. IAM role for AgentCore CodeInterpreter execution
+  3. S3 Files file system rooted at s3://<bucket>/<prefix>
+  4. Mount targets (one per --subnet)
+  5. Access point (POSIX 1000:1000, root=/)
+  6. Inline s3files:ClientMount / ClientWrite / GetAccessPoint policy on
+     the CI role scoped to the access point ARN
+  7. Custom AgentCore CodeInterpreter with networkMode=VPC and
+     filesystemConfigurations pointing at the access point
 
-Prereqs (you must supply these — the script won't create them):
-  --vpc-id       existing VPC id
-  --subnet-ids   comma-sep subnet ids inside the VPC (2+ AZs recommended)
-  --security-group-id   SG allowing TCP 2049 outbound (mount target SG must allow inbound)
-  --s3-bucket    the S3 bucket S3 Files should mount
-
-Usage:
-  uv run python scripts/bootstrap-agentcore-fs.py \\
-      --name chris-vfs \\
-      --region us-east-1 \\
-      --vpc-id vpc-xxxxxxxx \\
-      --subnet-ids subnet-aaaa,subnet-bbbb \\
-      --security-group-id sg-xxxxxxxx \\
-      --s3-bucket mirage-test-chris \\
-      --s3-prefix chris \\
-      --mount-path /mnt/s3data
+Prints the yaml block to paste into service/workspaces.yaml.
 """
 
 from __future__ import annotations
@@ -34,13 +22,13 @@ import argparse
 import json
 import sys
 import time
-from typing import Any
+from typing import Callable
 
 import boto3
 from botocore.exceptions import ClientError
 
 
-TRUST_POLICY = {
+AGENTCORE_TRUST = {
     "Version": "2012-10-17",
     "Statement": [
         {
@@ -52,99 +40,221 @@ TRUST_POLICY = {
 }
 
 
-def _s3files_policy(fs_arn: str, ap_arn: str) -> dict:
+def s3files_trust(account_id: str, region: str) -> dict:
+    """S3 Files runs on EFS infrastructure — service principal is
+    elasticfilesystem.amazonaws.com, scoped by source arn + account."""
     return {
         "Version": "2012-10-17",
         "Statement": [
             {
+                "Sid": "AllowS3FilesAssumeRole",
                 "Effect": "Allow",
-                "Action": [
-                    "s3files:ClientMount",
-                    "s3files:ClientWrite",
-                    "s3files:GetAccessPoint",
-                ],
-                "Resource": fs_arn,
-                "Condition": {"ArnEquals": {"s3files:AccessPointArn": ap_arn}},
+                "Principal": {"Service": "elasticfilesystem.amazonaws.com"},
+                "Action": "sts:AssumeRole",
+                "Condition": {
+                    "StringEquals": {"aws:SourceAccount": account_id},
+                    "ArnLike": {
+                        "aws:SourceArn": f"arn:aws:s3files:{region}:{account_id}:file-system/*"
+                    },
+                },
             }
         ],
     }
 
 
-def ensure_role(iam, name: str) -> str:
+def s3files_service_policy(bucket: str, account_id: str) -> dict:
+    bucket_arn = f"arn:aws:s3:::{bucket}"
+    return {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "S3BucketPermissions",
+                "Effect": "Allow",
+                "Action": ["s3:ListBucket", "s3:ListBucketVersions"],
+                "Resource": bucket_arn,
+                "Condition": {"StringEquals": {"aws:ResourceAccount": account_id}},
+            },
+            {
+                "Sid": "S3ObjectPermissions",
+                "Effect": "Allow",
+                "Action": [
+                    "s3:AbortMultipartUpload",
+                    "s3:DeleteObject*",
+                    "s3:GetObject*",
+                    "s3:List*",
+                    "s3:PutObject*",
+                ],
+                "Resource": f"{bucket_arn}/*",
+                "Condition": {"StringEquals": {"aws:ResourceAccount": account_id}},
+            },
+            {
+                "Sid": "EventBridgeManage",
+                "Effect": "Allow",
+                "Action": [
+                    "events:DeleteRule", "events:DisableRule", "events:EnableRule",
+                    "events:PutRule", "events:PutTargets", "events:RemoveTargets",
+                ],
+                "Condition": {
+                    "StringEquals": {"events:ManagedBy": "elasticfilesystem.amazonaws.com"}
+                },
+                "Resource": "arn:aws:events:*:*:rule/DO-NOT-DELETE-S3-Files*",
+            },
+            {
+                "Sid": "EventBridgeRead",
+                "Effect": "Allow",
+                "Action": [
+                    "events:DescribeRule", "events:ListRuleNamesByTarget",
+                    "events:ListRules", "events:ListTargetsByRule",
+                ],
+                "Resource": "arn:aws:events:*:*:rule/*",
+            },
+        ],
+    }
+
+
+def ci_client_mount_policy(fs_arn: str, ap_arn: str) -> dict:
+    return {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "MountAndWrite",
+                "Effect": "Allow",
+                "Action": ["s3files:ClientMount", "s3files:ClientWrite"],
+                "Resource": fs_arn,
+                "Condition": {"ArnEquals": {"s3files:AccessPointArn": ap_arn}},
+            },
+            {
+                "Sid": "DescribeAccessPoint",
+                "Effect": "Allow",
+                "Action": "s3files:GetAccessPoint",
+                "Resource": ap_arn,
+            },
+            {
+                "Sid": "DescribeFileSystem",
+                "Effect": "Allow",
+                "Action": [
+                    "s3files:GetFileSystem",
+                    "s3files:GetMountTarget",
+                    "s3files:ListMountTargets",
+                    "s3files:DescribeMountTargets",
+                    "s3files:ListAccessPoints",
+                    "s3files:ListFileSystems",
+                ],
+                "Resource": "*",
+            },
+        ],
+    }
+
+
+def ensure_role(iam, name: str, trust: dict, description: str) -> str:
     try:
         r = iam.get_role(RoleName=name)
+        # Update trust policy in case it drifted (e.g. earlier bootstrap
+        # attempt wrote the wrong principal).
+        iam.update_assume_role_policy(RoleName=name, PolicyDocument=json.dumps(trust))
         return r["Role"]["Arn"]
     except ClientError as exc:
         if exc.response["Error"]["Code"] != "NoSuchEntity":
             raise
     r = iam.create_role(
         RoleName=name,
-        AssumeRolePolicyDocument=json.dumps(TRUST_POLICY),
-        Description="AgentCore CodeInterpreter execution role with S3 Files access",
+        AssumeRolePolicyDocument=json.dumps(trust),
+        Description=description,
     )
     return r["Role"]["Arn"]
 
 
-def attach_s3files_policy(iam, role_name: str, policy_name: str, fs_arn: str, ap_arn: str) -> None:
+def put_inline_policy(iam, role: str, policy_name: str, policy: dict) -> None:
     iam.put_role_policy(
-        RoleName=role_name,
-        PolicyName=policy_name,
-        PolicyDocument=json.dumps(_s3files_policy(fs_arn, ap_arn)),
+        RoleName=role, PolicyName=policy_name, PolicyDocument=json.dumps(policy)
     )
 
 
-def ensure_s3files_fs(s3files, name: str, bucket: str, region: str) -> str:
-    for page in s3files.get_paginator("list_file_systems").paginate():
-        for fs in page.get("FileSystems", []) or []:
-            if fs.get("Name") == name:
-                return fs["FileSystemArn"]
-    r = s3files.create_file_system(
-        Name=name,
-        BackingStorage={"S3": {"BucketName": bucket}},
+def find_file_system(s3files, name: str, bucket: str, prefix: str):
+    bucket_arn = f"arn:aws:s3:::{bucket}"
+    want_prefix = prefix.strip("/")
+    for page in s3files.get_paginator("list_file_systems").paginate(bucket=bucket_arn):
+        for summary in page.get("fileSystems", []) or []:
+            fs = s3files.get_file_system(fileSystemId=summary["fileSystemId"])
+            got_prefix = (fs.get("prefix") or "").strip("/")
+            if got_prefix == want_prefix:
+                return fs
+    return None
+
+
+def ensure_file_system(s3files, name: str, bucket: str, prefix: str, role_arn: str) -> dict:
+    existing = find_file_system(s3files, name, bucket, prefix)
+    if existing:
+        return existing
+    kwargs = dict(
+        bucket=f"arn:aws:s3:::{bucket}",
+        roleArn=role_arn,
+        acceptBucketWarning=True,
+        tags=[{"key": "name", "value": name}],
     )
-    fs_id = r["FileSystemId"]
-    _wait(lambda: _fs_ready(s3files, fs_id), "S3 Files fs available", 600)
-    return r["FileSystemArn"]
+    normalized_prefix = prefix.strip("/")
+    if normalized_prefix:
+        kwargs["prefix"] = f"{normalized_prefix}/"  # API requires trailing / or empty
+    r = s3files.create_file_system(**kwargs)
+    fs_id = r["fileSystemId"]
+    _wait(lambda: _fs_state(s3files, fs_id) == "AVAILABLE", "S3 Files fs AVAILABLE", 600)
+    return s3files.get_file_system(fileSystemId=fs_id)
 
 
-def ensure_mount_target(s3files, fs_id: str, subnet_id: str, sg_id: str) -> str:
-    for mt in s3files.describe_mount_targets(FileSystemId=fs_id).get("MountTargets", []) or []:
-        if mt["SubnetId"] == subnet_id:
-            return mt["MountTargetId"]
-    r = s3files.create_mount_target(
-        FileSystemId=fs_id, SubnetId=subnet_id, SecurityGroups=[sg_id],
-    )
-    mt_id = r["MountTargetId"]
-    _wait(lambda: _mt_ready(s3files, mt_id), "mount target available", 600)
-    return mt_id
+def existing_mount_target_ids(s3files, fs_id: str) -> dict[str, str]:
+    """Return {subnet_id: mount_target_id}."""
+    out: dict[str, str] = {}
+    for page in s3files.get_paginator("list_mount_targets").paginate(fileSystemId=fs_id):
+        for mt in page.get("mountTargets", []) or []:
+            out[mt["subnetId"]] = mt["mountTargetId"]
+    return out
 
 
-def ensure_access_point(s3files, fs_id: str, name: str, prefix: str) -> str:
-    for page in s3files.get_paginator("list_access_points").paginate(FileSystemId=fs_id):
-        for ap in page.get("AccessPoints", []) or []:
-            if ap.get("Name") == name:
-                return ap["AccessPointArn"]
+def ensure_mount_targets(s3files, fs_id: str, subnet_ids: list[str], sg_id: str) -> list[str]:
+    existing = existing_mount_target_ids(s3files, fs_id)
+    mt_ids: list[str] = []
+    for sn in subnet_ids:
+        if sn in existing:
+            mt_ids.append(existing[sn])
+            continue
+        r = s3files.create_mount_target(
+            fileSystemId=fs_id, subnetId=sn, securityGroups=[sg_id],
+        )
+        mt_ids.append(r["mountTargetId"])
+    for mt_id in mt_ids:
+        _wait(lambda mt_id=mt_id: _mt_state(s3files, mt_id) == "AVAILABLE",
+              f"mount target {mt_id} AVAILABLE", 600)
+    return mt_ids
+
+
+def ensure_access_point(s3files, fs_id: str, name: str) -> str:
+    for page in s3files.get_paginator("list_access_points").paginate(fileSystemId=fs_id):
+        for ap in page.get("accessPoints", []) or []:
+            if ap.get("name") == name:
+                return ap["accessPointArn"]
     r = s3files.create_access_point(
-        FileSystemId=fs_id,
-        Name=name,
-        PosixUser={"Uid": 1000, "Gid": 1000},
-        RootDirectory={
-            "Path": f"/{prefix.strip('/')}" if prefix else "/",
-            "CreationInfo": {"OwnerUid": 1000, "OwnerGid": 1000, "Permissions": "755"},
+        fileSystemId=fs_id,
+        posixUser={"uid": 1000, "gid": 1000},
+        rootDirectory={
+            "path": "/",
+            "creationPermissions": {"ownerUid": 1000, "ownerGid": 1000, "permissions": "755"},
         },
+        tags=[{"key": "name", "value": name}],
     )
-    return r["AccessPointArn"]
+    return r["accessPointArn"]
 
 
 def ensure_code_interpreter(
     cp, name: str, role_arn: str, subnet_ids: list[str], sg_id: str,
     fs_arn: str, ap_arn: str, mount_path: str,
-) -> tuple[str, str]:
+) -> str:
+    """Return the code interpreter ID (not ARN — data plane requires ID)."""
     for page in cp.get_paginator("list_code_interpreters").paginate():
         for ci in page.get("codeInterpreterSummaries", []) or []:
             if ci.get("name") == name:
-                arn = ci.get("codeInterpreterArn") or ci.get("codeInterpreterId")
-                return name, arn
+                ci_id = ci.get("codeInterpreterId") or name
+                _wait_ci_ready(cp, ci_id)
+                return ci_id
     r = cp.create_code_interpreter(
         name=name,
         executionRoleArn=role_arn,
@@ -160,33 +270,40 @@ def ensure_code_interpreter(
             }
         }],
     )
-    identifier = r.get("codeInterpreterArn") or r.get("codeInterpreterId") or name
-    return name, identifier
+    ci_id = r.get("codeInterpreterId") or name
+    _wait_ci_ready(cp, ci_id)
+    return ci_id
 
 
-def _wait(check, what: str, timeout_s: int) -> None:
+def _wait_ci_ready(cp, ci_id: str) -> None:
+    _wait(
+        lambda: (cp.get_code_interpreter(codeInterpreterId=ci_id).get("status") or "").upper() == "READY",
+        f"code interpreter {ci_id} READY",
+        600,
+    )
+
+
+def _fs_state(s3files, fs_id: str) -> str:
+    try:
+        return (s3files.get_file_system(fileSystemId=fs_id).get("status") or "").upper()
+    except ClientError:
+        return ""
+
+
+def _mt_state(s3files, mt_id: str) -> str:
+    try:
+        return (s3files.get_mount_target(mountTargetId=mt_id).get("status") or "").upper()
+    except ClientError:
+        return ""
+
+
+def _wait(check: Callable[[], bool], what: str, timeout_s: int) -> None:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         if check():
             return
         time.sleep(3)
     raise TimeoutError(f"timed out waiting for {what}")
-
-
-def _fs_ready(s3files, fs_id: str) -> bool:
-    try:
-        r = s3files.describe_file_systems(FileSystemId=fs_id)
-        return (r["FileSystems"][0].get("LifeCycleState") or "").lower() == "available"
-    except ClientError:
-        return False
-
-
-def _mt_ready(s3files, mt_id: str) -> bool:
-    try:
-        r = s3files.describe_mount_targets(MountTargetId=mt_id)
-        return (r["MountTargets"][0].get("LifeCycleState") or "").lower() == "available"
-    except ClientError:
-        return False
 
 
 def main() -> int:
@@ -206,38 +323,57 @@ def main() -> int:
     iam = boto3.client("iam")
     s3files = boto3.client("s3files", region_name=args.region)
     cp = boto3.client("bedrock-agentcore-control", region_name=args.region)
+    account_id = boto3.client("sts").get_caller_identity()["Account"]
 
-    print(f"[1/5] IAM role {args.name}-role", flush=True)
-    role_arn = ensure_role(iam, f"{args.name}-role")
+    print(f"[1/6] IAM role for S3 Files service", flush=True)
+    s3files_role = f"{args.name}-s3files-role"
+    s3files_role_arn = ensure_role(iam, s3files_role,
+                                   s3files_trust(account_id, args.region),
+                                   "S3 Files service role")
+    put_inline_policy(iam, s3files_role, "s3-access",
+                      s3files_service_policy(args.s3_bucket, account_id))
+    print(f"     {s3files_role_arn}")
 
-    print(f"[2/5] S3 Files fs {args.name}-fs (bucket={args.s3_bucket})", flush=True)
-    fs_arn = ensure_s3files_fs(s3files, f"{args.name}-fs", args.s3_bucket, args.region)
-    fs_id = fs_arn.split("/")[-1]
+    print(f"[2/6] IAM role for AgentCore CodeInterpreter", flush=True)
+    ci_role = f"{args.name}-ci-role"
+    ci_role_arn = ensure_role(iam, ci_role, AGENTCORE_TRUST, "AgentCore CI execution role")
+    print(f"     {ci_role_arn}")
 
-    print(f"[3/5] mount targets in {len(subnet_ids)} subnets", flush=True)
-    for sn in subnet_ids:
-        ensure_mount_target(s3files, fs_id, sn, args.security_group_id)
+    print(f"[3/6] S3 Files fs {args.name}-fs (bucket={args.s3_bucket}, prefix={args.s3_prefix})",
+          flush=True)
+    fs = ensure_file_system(s3files, f"{args.name}-fs", args.s3_bucket, args.s3_prefix,
+                            s3files_role_arn)
+    print(f"     {fs['fileSystemArn']}")
 
-    print(f"[4/5] access point {args.name}-ap (root=/{args.s3_prefix.strip('/')})", flush=True)
-    ap_arn = ensure_access_point(s3files, fs_id, f"{args.name}-ap", args.s3_prefix)
-    attach_s3files_policy(iam, f"{args.name}-role", f"{args.name}-s3files", fs_arn, ap_arn)
+    print(f"[4/6] mount targets in {len(subnet_ids)} subnet(s)", flush=True)
+    mt_ids = ensure_mount_targets(s3files, fs["fileSystemId"], subnet_ids, args.security_group_id)
+    for mt in mt_ids:
+        print(f"     {mt}")
 
-    print(f"[5/5] code interpreter {args.name}-ci (VPC + mount)", flush=True)
-    ci_name, ci_id = ensure_code_interpreter(
-        cp, f"{args.name}-ci", role_arn, subnet_ids, args.security_group_id,
-        fs_arn, ap_arn, args.mount_path,
+    print(f"[5/6] access point {args.name}-ap", flush=True)
+    ap_arn = ensure_access_point(s3files, fs["fileSystemId"], f"{args.name}-ap")
+    put_inline_policy(iam, ci_role, "s3files-mount",
+                      ci_client_mount_policy(fs["fileSystemArn"], ap_arn))
+    print(f"     {ap_arn}")
+
+    # IAM policy propagation lag — brief wait so the next call sees the perm.
+    print("     waiting 15s for IAM propagation...", flush=True)
+    time.sleep(15)
+
+    print(f"[6/6] AgentCore code interpreter {args.name}-ci", flush=True)
+    ci_id = ensure_code_interpreter(
+        cp, f"{args.name.replace('-', '_')}_ci", ci_role_arn, subnet_ids, args.security_group_id,
+        fs["fileSystemArn"], ap_arn, args.mount_path,
     )
+    print(f"     {ci_id}")
 
-    print("\n=== paste into service/workspaces.yaml under runtimes.code-interpreter ===\n")
+    print("\n=== paste into service/workspaces.yaml → runtimes.code-interpreter ===\n")
     print(f"  code-interpreter:")
     print(f"    region: {args.region}")
+    print(f"    # /mnt/s3data → S3 Files → s3://{args.s3_bucket}/{args.s3_prefix.strip('/')}/")
+    print(f"    # Mount baked in at CI create time; no filesystem_configurations here.")
     print(f"    code_interpreter_identifier: {ci_id}")
     print(f"    session_timeout_seconds: 900")
-    print(f"    filesystem_configurations:")
-    print(f"      - s3FilesConfiguration:")
-    print(f"          accessPointArn: {ap_arn}")
-    print(f"          fileSystemArn:  {fs_arn}")
-    print(f"          mountPath: {args.mount_path}")
     return 0
 
 
