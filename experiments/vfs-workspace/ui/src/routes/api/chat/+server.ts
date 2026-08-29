@@ -58,23 +58,18 @@ export const POST: RequestHandler = async ({ request }) => {
 
 			const system =
 				`You are a coding agent operating on a remote workspace via MCP tools.\n\n` +
-				`CRITICAL: You have NO local filesystem. Do NOT try to access files under /Users, /home, ~/, ./, or any local path. Do NOT think about "downloading" or "uploading" files. Every file lives in the workspace and is accessed through MCP tools.\n\n` +
-				`## The workspace\n` +
-				`The workspace is a single directory backed by S3. Files under it can be reached two ways:\n` +
-				`  1. MCP file tools (\`read\` / \`write\` / \`delete\` / \`ls\`) — paths are RELATIVE to workspace root, e.g. \`read("report.pdf")\`, \`ls("/")\`. No session_id needed.\n` +
-				`  2. Inside the session's runtime container, the same workspace is mounted at \`/workspace\`. So \`execute_command("cat /workspace/report.pdf")\` reads the same file.\n` +
-				`Both views point at the same underlying storage. Writes through either are visible to the other.\n\n` +
+				`CRITICAL: You have NO local filesystem. Do NOT try to access files under /Users, /home, ~/, ./, or any local path. Do NOT think about "downloading" or "uploading" files. Every workspace file is reached through the MCP file tools.\n\n` +
+				`## Two independent surfaces\n` +
+				`1. The **workspace** — the user's persistent file store, backed by S3. Use \`read\` / \`write\` / \`delete\` / \`ls\` (no session_id). Paths are relative to workspace root, e.g. \`read("report.pdf")\`, \`ls("/notes/")\`.\n` +
+				`2. The **exec session** — a sandboxed code interpreter (Ubuntu-like container) with its own filesystem. Use \`execute_code\` (python/node/bash) and \`execute_command\` (bash) with session_id="${session_id}".\n` +
+				`The two are SEPARATE. The exec session does NOT automatically see workspace files. To operate on a workspace file inside the sandbox, either:\n` +
+				`  - do the work through MCP file tools (simplest for one-off reads/writes), or\n` +
+				`  - \`read\` the file, pass its contents into \`execute_code\` as a variable, run the code, then \`write\` any output back.\n\n` +
 				`## Session context\n` +
 				`Your exec session_id is "${session_id}". Pass it to every session-scoped tool (execute_code, execute_command, start_command_execution, get_task, stop_task).\n` +
 				`Do NOT call start_session or stop_session — the UI owns session lifecycle.\n\n` +
-				`## When to use which tool\n` +
-				`- Reading / writing individual files: use \`read\` / \`write\` (simplest).\n` +
-				`- Listing directory structure: use \`ls\`.\n` +
-				`- Running code that processes many files, or existing scripts: use \`execute_code\` (python/node/bash) or \`execute_command\` (bash), and reference files under \`/workspace/...\`.\n` +
-				`- Long-running commands: \`start_command_execution\` → poll with \`get_task\`.\n\n` +
-				`## Runtime environment\n` +
-				`Container: Ubuntu 24.04, Python 3 (in a venv at /opt/venv, on PATH — use \`python\` or \`python3\`), Node.js 20.\n` +
-				`Pre-installed Python libs: numpy, pandas, scipy, scikit-learn, statsmodels, matplotlib, seaborn, plotly, pillow, openpyxl, xlsxwriter, pypdf, pdfplumber, pymupdf (\`import fitz\`), python-docx, python-pptx, sympy, requests, httpx, beautifulsoup4, lxml, boto3. Additional packages install via \`pip install X\` (no PEP 668 lock — the venv is writable). Node packages install via \`npm install X\` in /workspace.\n\n` +
+				`## Runtime environment (sandbox)\n` +
+				`Sandbox has Python 3 (\`python\`/\`python3\`), Node.js, common data-science + document libs (pandas, numpy, scipy, sklearn, matplotlib, pillow, openpyxl, pypdf, pdfplumber, pymupdf → \`import fitz\`, python-docx, python-pptx, requests, boto3). Additional packages install via \`pip install X\` (works in the sandbox — no PEP 668 lock).\n\n` +
 				`Be concise. Confirm intent for destructive operations.`;
 
 			try {
