@@ -5,26 +5,100 @@
 		tools?: { name: string; input: unknown; result?: string; is_error?: boolean }[];
 	}
 
+	interface ChatSession {
+		id: string;
+		title: string;
+		created_at: number;
+		messages: ChatMsg[];
+	}
+
 	let { workspaceId }: { workspaceId: string } = $props();
 
-	let messages = $state<ChatMsg[]>([]);
+	const storageKey = $derived(`vfs-workspace:${workspaceId}:sessions`);
+	const activeKey = $derived(`vfs-workspace:${workspaceId}:active-session`);
+
+	let sessions = $state<ChatSession[]>([]);
+	let activeId = $state<string | null>(null);
 	let input = $state('');
 	let busy = $state(false);
 	let error = $state<string | null>(null);
+	let loaded = false;
+
+	const active = $derived(sessions.find((s) => s.id === activeId) ?? null);
+
+	function loadSessions() {
+		try {
+			const raw = localStorage.getItem(storageKey);
+			sessions = raw ? JSON.parse(raw) : [];
+			activeId = localStorage.getItem(activeKey);
+			if (!sessions.find((s) => s.id === activeId)) {
+				activeId = sessions[0]?.id ?? null;
+			}
+		} catch {
+			sessions = [];
+			activeId = null;
+		}
+	}
+
+	function persistSessions() {
+		try {
+			localStorage.setItem(storageKey, JSON.stringify(sessions));
+			if (activeId) localStorage.setItem(activeKey, activeId);
+			else localStorage.removeItem(activeKey);
+		} catch {}
+	}
+
+	function newSession(): ChatSession {
+		const s: ChatSession = {
+			id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+			title: 'New session',
+			created_at: Date.now(),
+			messages: []
+		};
+		sessions = [s, ...sessions];
+		activeId = s.id;
+		persistSessions();
+		return s;
+	}
+
+	function deleteSession(id: string) {
+		sessions = sessions.filter((s) => s.id !== id);
+		if (activeId === id) activeId = sessions[0]?.id ?? null;
+		persistSessions();
+	}
+
+	function selectSession(id: string) {
+		activeId = id;
+		persistSessions();
+	}
+
+	function updateTitle(session: ChatSession) {
+		const firstUser = session.messages.find((m) => m.role === 'user');
+		if (firstUser) session.title = firstUser.text.slice(0, 40) + (firstUser.text.length > 40 ? '…' : '');
+	}
+
+	$effect(() => {
+		if (loaded) return;
+		loaded = true;
+		loadSessions();
+		if (!activeId) newSession();
+	});
 
 	async function send() {
-		if (!input.trim() || busy) return;
+		if (!input.trim() || busy || !active) return;
 		error = null;
 		busy = true;
 		const userMsg: ChatMsg = { role: 'user', text: input.trim() };
-		messages = [...messages, userMsg];
+		active.messages = [...active.messages, userMsg];
 		input = '';
+		updateTitle(active);
 
 		const assistantMsg: ChatMsg = { role: 'assistant', text: '', tools: [] };
-		messages = [...messages, assistantMsg];
+		active.messages = [...active.messages, assistantMsg];
+		persistSessions();
 
 		try {
-			const wire = messages.slice(0, -1).map((m) => ({ role: m.role, content: m.text }));
+			const wire = active.messages.slice(0, -1).map((m) => ({ role: m.role, content: m.text }));
 			const res = await fetch('/api/chat', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -46,7 +120,7 @@
 					const line = raw.trim();
 					if (!line.startsWith('data:')) continue;
 					const payload = JSON.parse(line.slice(5).trim());
-					const last = messages[messages.length - 1];
+					const last = active.messages[active.messages.length - 1];
 					if (payload.type === 'text') {
 						last.text += payload.text;
 					} else if (payload.type === 'tool_use') {
@@ -60,13 +134,14 @@
 					} else if (payload.type === 'error') {
 						error = payload.message;
 					}
-					messages = [...messages];
+					active.messages = [...active.messages];
 				}
 			}
 		} catch (e) {
 			error = String(e);
 		} finally {
 			busy = false;
+			persistSessions();
 		}
 	}
 
@@ -79,33 +154,63 @@
 </script>
 
 <div class="flex flex-col h-full min-h-0">
+	<div class="mb-2 flex items-center gap-1 border-b border-neutral-800 pb-2">
+		<select
+			value={activeId ?? ''}
+			onchange={(e) => selectSession((e.currentTarget as HTMLSelectElement).value)}
+			class="flex-1 rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-xs font-mono"
+		>
+			{#each sessions as s}
+				<option value={s.id}>{s.title}</option>
+			{/each}
+		</select>
+		<button
+			onclick={() => newSession()}
+			title="New session"
+			class="rounded bg-neutral-800 px-2 py-1 text-xs hover:bg-neutral-700"
+		>
+			+ New
+		</button>
+		{#if active && sessions.length > 1}
+			<button
+				onclick={() => active && deleteSession(active.id)}
+				title="Delete current session"
+				class="rounded bg-neutral-800 px-2 py-1 text-xs hover:bg-red-900"
+			>
+				×
+			</button>
+		{/if}
+	</div>
+
 	<div class="flex-1 overflow-y-auto space-y-3 pr-1 min-h-0">
-		{#each messages as m}
-			<div class="text-xs">
-				<div class="opacity-60 font-mono mb-1">{m.role}</div>
-				<div class="whitespace-pre-wrap font-mono">{m.text}</div>
-				{#if m.tools && m.tools.length}
-					<div class="mt-2 space-y-2">
-						{#each m.tools as t}
-							<details class="rounded border border-neutral-800 p-2">
-								<summary class="cursor-pointer font-mono">
-									<span class="text-blue-400">{t.name}</span>
-									<span class="opacity-60">
-										({Object.keys((t.input as Record<string, unknown>) ?? {}).join(', ')})
-									</span>
-								</summary>
-								<pre class="mt-1 text-[10px] opacity-70 whitespace-pre-wrap">{JSON.stringify(t.input, null, 2)}</pre>
-								{#if t.result}
-									<pre
-										class="mt-1 text-[10px] whitespace-pre-wrap {t.is_error ? 'text-red-400' : ''}"
-									>{t.result}</pre>
-								{/if}
-							</details>
-						{/each}
-					</div>
-				{/if}
-			</div>
-		{/each}
+		{#if active}
+			{#each active.messages as m}
+				<div class="text-xs">
+					<div class="opacity-60 font-mono mb-1">{m.role}</div>
+					<div class="whitespace-pre-wrap font-mono">{m.text}</div>
+					{#if m.tools && m.tools.length}
+						<div class="mt-2 space-y-2">
+							{#each m.tools as t}
+								<details class="rounded border border-neutral-800 p-2">
+									<summary class="cursor-pointer font-mono">
+										<span class="text-blue-400">{t.name}</span>
+										<span class="opacity-60">
+											({Object.keys((t.input as Record<string, unknown>) ?? {}).join(', ')})
+										</span>
+									</summary>
+									<pre class="mt-1 text-[10px] opacity-70 whitespace-pre-wrap">{JSON.stringify(t.input, null, 2)}</pre>
+									{#if t.result}
+										<pre
+											class="mt-1 text-[10px] whitespace-pre-wrap {t.is_error ? 'text-red-400' : ''}"
+										>{t.result}</pre>
+									{/if}
+								</details>
+							{/each}
+						</div>
+					{/if}
+				</div>
+			{/each}
+		{/if}
 		{#if busy}
 			<div class="text-xs opacity-50 font-mono">…</div>
 		{/if}
@@ -125,7 +230,7 @@
 		></textarea>
 		<button
 			onclick={send}
-			disabled={busy}
+			disabled={busy || !active}
 			class="rounded bg-blue-600 px-3 py-1 text-xs font-medium hover:bg-blue-500 disabled:opacity-50 self-end"
 		>
 			{busy ? '…' : 'Send'}
