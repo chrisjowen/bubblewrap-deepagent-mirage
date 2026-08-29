@@ -72,6 +72,9 @@ export const POST: RequestHandler = async ({ request }) => {
 				`- Listing directory structure: use \`ls\`.\n` +
 				`- Running code that processes many files, or existing scripts: use \`execute_code\` (python/node/bash) or \`execute_command\` (bash), and reference files under \`/workspace/...\`.\n` +
 				`- Long-running commands: \`start_command_execution\` → poll with \`get_task\`.\n\n` +
+				`## Runtime environment\n` +
+				`Container: Ubuntu 24.04, Python 3 (in a venv at /opt/venv, on PATH — use \`python\` or \`python3\`), Node.js 20.\n` +
+				`Pre-installed Python libs: numpy, pandas, scipy, scikit-learn, statsmodels, matplotlib, seaborn, plotly, pillow, openpyxl, xlsxwriter, pypdf, pdfplumber, pymupdf (\`import fitz\`), python-docx, python-pptx, sympy, requests, httpx, beautifulsoup4, lxml, boto3. Additional packages install via \`pip install X\` (no PEP 668 lock — the venv is writable). Node packages install via \`npm install X\` in /workspace.\n\n` +
 				`Be concise. Confirm intent for destructive operations.`;
 
 			try {
