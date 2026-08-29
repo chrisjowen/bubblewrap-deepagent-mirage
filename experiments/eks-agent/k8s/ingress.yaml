@@ -1,0 +1,27 @@
+# Requires AWS Load Balancer Controller installed in kube-system.
+# See eks/README.md for install steps.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ada
+  namespace: ada
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip  # required for Fargate
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    # Long timeout for streaming SSE responses.
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=600
+spec:
+  ingressClassName: alb
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ada
+                port:
+                  number: 80

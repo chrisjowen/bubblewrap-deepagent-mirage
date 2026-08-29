@@ -8,6 +8,11 @@ wheels/
 
 # Virtual environments
 .venv
+**/.venv/
+
+# JS / Node
+node_modules/
+**/node_modules/
 
 # Local secrets
 .env
@@ -19,6 +24,6 @@ wheels/
 workspace/
 
 # AgentCore deploy artifacts + AWS account-specific state
-ada/agentcore/ada.zip
-ada/agentcore/.cli/deployed-state.json
-ada/agentcore/aws-targets.json
+experiments/agentcore-ada/agentcore/ada.zip
+experiments/agentcore-ada/agentcore/.cli/deployed-state.json
+experiments/agentcore-ada/agentcore/aws-targets.json

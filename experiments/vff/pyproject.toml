@@ -1,0 +1,13 @@
+[project]
+name = "vff"
+version = "0.1.0"
+description = "Virtual filesystem MCP prototype — single-workspace mirage + monty over S3"
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp>=2.0.0",
+    "mirage-ai[s3]>=0.0.5",
+    "pydantic-monty>=0.0.20",
+    "claude-agent-sdk>=0.1.0",
+    "python-dotenv>=1.0.0",
+    "deepagents>=0.6.12",
+]

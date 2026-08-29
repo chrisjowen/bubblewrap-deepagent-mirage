@@ -1,0 +1,58 @@
+# Single replica: InMemorySaver-based session state is per-pod.
+# Multiple replicas require either sticky sessions on the ALB or a
+# shared checkpointer (Redis/Postgres). Not addressed in this experiment.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ada
+  namespace: ada
+  labels:
+    app: ada
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ada
+  strategy:
+    type: Recreate  # single-replica; avoid two pods sharing sessions during rollout
+  template:
+    metadata:
+      labels:
+        app: ada
+    spec:
+      serviceAccountName: ada  # IRSA-bound SA (AdaS3Access policy)
+      containers:
+        - name: ada
+          # Replace ACCOUNT + REGION before applying.
+          # e.g. 101767135657.dkr.ecr.us-east-1.amazonaws.com/ada-eks:latest
+          image: ACCOUNT.dkr.ecr.REGION.amazonaws.com/ada-eks:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: ada-env
+          env:
+            - name: SANDBOX_DIR
+              value: /tmp/sandbox
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"

@@ -1,0 +1,25 @@
+# eksctl cluster spec — Fargate-only.
+#
+#   eksctl create cluster -f eks/cluster.yaml
+#
+# Region / account come from your AWS_PROFILE / AWS_REGION when running.
+
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: ada-eks
+  region: us-east-1
+  version: "1.34"
+
+# OIDC needed for IRSA + AWS Load Balancer Controller service account.
+iam:
+  withOIDC: true
+
+# Fargate profile covers the app namespace + kube-system (needed for
+# coredns to run on Fargate; the AWS Load Balancer Controller runs here too).
+fargateProfiles:
+  - name: fp-default
+    selectors:
+      - namespace: ada
+      - namespace: kube-system

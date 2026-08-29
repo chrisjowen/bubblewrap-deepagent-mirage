@@ -1,14 +1,15 @@
 [project]
-name = "agent-runtime-adapter"
+name = "deepagents-repl"
 version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
+description = "Original agent runtime experiment — deepagents REPL with mirage+bwrap sandbox"
 requires-python = ">=3.11"
 dependencies = [
     "boto3>=1.40.61",
+    "claude-agent-sdk>=0.1.0",
     "deepagents>=0.6.12",
     "langchain>=1.3.12,<2.0.0",
     "langchain-anthropic>=1.5.4,<2.0.0",
     "mirage-ai[s3]>=0.0.5",
+    "pydantic-monty>=0.0.20",
     "python-dotenv>=1.0.0",
 ]
