@@ -14,6 +14,17 @@ Umbrella repo for agent-runtime experiments. Each folder under [`experiments/`](
 
 Each experiment has its own `README.md` with run instructions.
 
+## Quick start
+
+```bash
+# Prereqs: docker, uv, pnpm; AWS creds exported (AWS_PROFILE or explicit keys).
+make help          # list targets
+make dev           # boot vfs-workspace (service + UI + runtime image)
+make vfs-test      # run tests
+```
+
+Ports default to service `:8100`, UI `:5273`. Override with `VFS_SERVICE_PORT=... VFS_UI_PORT=... make dev`.
+
 ## Design docs
 
 - [Spec — vfs-workspace](docs/superpowers/specs/2026-08-29-vfs-workspace-design.md)
