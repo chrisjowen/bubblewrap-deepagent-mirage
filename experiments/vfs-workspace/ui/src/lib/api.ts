@@ -1,5 +1,7 @@
-const BASE = import.meta.env.PUBLIC_API_BASE ?? 'http://localhost:8000';
-const USER = import.meta.env.PUBLIC_USER_ID ?? 'chris';
+import { env } from '$env/dynamic/public';
+
+const BASE = env.PUBLIC_API_BASE ?? 'http://127.0.0.1:8100';
+const USER = env.PUBLIC_USER_ID ?? 'chris';
 
 async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
 	const res = await fetch(`${BASE}${path}`, {

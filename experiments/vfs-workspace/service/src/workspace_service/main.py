@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from workspace_service.auth import make_current_user_dep
 from workspace_service.config import load_config
@@ -42,6 +43,17 @@ def create_app() -> FastAPI:
         manager.close_all()
 
     app = FastAPI(title="vfs-workspace service", lifespan=lifespan)
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=os.environ.get(
+            "CORS_ORIGINS",
+            "http://localhost:5273,http://127.0.0.1:5273,http://localhost:5173,http://127.0.0.1:5173",
+        ).split(","),
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.middleware("http")
     async def _mcp_auth(request, call_next):
