@@ -1,0 +1,15 @@
+version: "3.9"
+# Service runs on host (needs to spawn sibling docker containers via docker daemon).
+# Only the UI is composed here.
+services:
+  ui:
+    image: node:22-alpine
+    working_dir: /app
+    volumes:
+      - ./ui:/app
+    ports:
+      - "5173:5173"
+    environment:
+      PUBLIC_API_BASE: http://host.docker.internal:8000
+      PUBLIC_USER_ID: chris
+    command: sh -c "corepack enable && pnpm install && pnpm dev --host 0.0.0.0"

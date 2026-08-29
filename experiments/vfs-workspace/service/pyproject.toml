@@ -1,0 +1,34 @@
+[project]
+name = "workspace-service"
+version = "0.1.0"
+description = "Mirage-backed workspace service with pluggable runtime adapters (experiment)"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "fastmcp>=2.0.0",
+    "mirage-ai[s3]>=0.0.5",
+    "boto3>=1.40.61",
+    "pyyaml>=6.0.2",
+    "pydantic>=2.9.0",
+    "python-dotenv>=1.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.28.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mirage_runtimes", "src/workspace_service"]
