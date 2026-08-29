@@ -1,9 +1,10 @@
 """AWS Bedrock AgentCore CodeInterpreter implementation.
 
-Thin wrapper around bedrock-agentcore's start_code_interpreter_session /
-invoke_code_interpreter / stop_code_interpreter_session APIs. Every
-tool call dispatches through invoke_code_interpreter with a `name` and
-`arguments`, parsing the streamed structuredContent for results.
+Wraps start_code_interpreter_session / invoke_code_interpreter /
+stop_code_interpreter_session. Optionally attaches S3 Files (or EFS)
+access-point mounts to the session via `filesystemConfigurations`, so
+the sandbox sees the workspace bucket at a real mount path like
+/mnt/s3data.
 """
 
 from __future__ import annotations
@@ -29,6 +30,13 @@ class AwsConfig:
     code_interpreter_identifier: str = "aws.codeinterpreter.v1"
     session_timeout_seconds: int = 900
     session_name: str | None = None
+    # Optional list of dicts matching AWS filesystemConfigurations shape:
+    #   [{"s3FilesConfiguration": {"accessPointArn", "fileSystemArn", "mountPath"}}]
+    # or {"efsConfiguration": {...}}. Passed straight through to
+    # start_code_interpreter_session. Requires the code interpreter to be
+    # created with networkMode=VPC + an execution role with the mount IAM
+    # permissions. See docs/agentcore-filesystem.md.
+    filesystem_configurations: list[dict] | None = None
 
 
 @dataclass
@@ -50,11 +58,15 @@ class AwsCodeInterpreter(CodeInterpreterSession):
         return "code-interpreter"
 
     async def start(self) -> None:
-        resp = await asyncio.to_thread(
-            self._client.start_code_interpreter_session,
+        kwargs: dict[str, Any] = dict(
             codeInterpreterIdentifier=self.config.code_interpreter_identifier,
             name=self.config.session_name or self._session_id,
             sessionTimeoutSeconds=self.config.session_timeout_seconds,
+        )
+        if self.config.filesystem_configurations:
+            kwargs["filesystemConfigurations"] = self.config.filesystem_configurations
+        resp = await asyncio.to_thread(
+            self._client.start_code_interpreter_session, **kwargs
         )
         self._remote_id = resp["sessionId"]
 

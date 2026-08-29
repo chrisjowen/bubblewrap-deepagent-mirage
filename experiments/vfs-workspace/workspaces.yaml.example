@@ -14,5 +14,17 @@ runtimes:
     aws_env_forwarding: true
   code-interpreter:
     region: us-east-1
+    # Use the built-in identifier for a session without mounts, or a
+    # custom identifier (arn / id) from `aws bedrock-agentcore-control
+    # create-code-interpreter` for a session with VPC + filesystem mounts.
     code_interpreter_identifier: aws.codeinterpreter.v1
     session_timeout_seconds: 900
+    # Optional: mount S3 Files / EFS access points into the sandbox.
+    # Requires a custom code_interpreter_identifier created with
+    # networkMode: VPC and an execution role with s3files:ClientMount
+    # (or elasticfilesystem:ClientMount). See docs/agentcore-filesystem.md.
+    # filesystem_configurations:
+    #   - s3FilesConfiguration:
+    #       accessPointArn: arn:aws:s3files:us-east-1:ACCOUNT:file-system/FS_ID/access-point/AP_ID
+    #       fileSystemArn:  arn:aws:s3files:us-east-1:ACCOUNT:file-system/FS_ID
+    #       mountPath: /mnt/s3data

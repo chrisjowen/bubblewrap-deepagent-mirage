@@ -29,6 +29,7 @@ def build(user: UserSpec, runtime_spec: dict) -> CodeInterpreterSession:
             region=runtime_spec.get("region", user.s3_region),
             code_interpreter_identifier=runtime_spec["code_interpreter_identifier"],
             session_timeout_seconds=runtime_spec.get("session_timeout_seconds", 900),
+            filesystem_configurations=runtime_spec.get("filesystem_configurations"),
         )
         return AwsCodeInterpreter(config=cfg)
     raise ValueError(f"unknown runtime: {name}")

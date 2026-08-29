@@ -29,18 +29,19 @@ RUN ARCH=$(uname -m) \
  && dpkg -i /tmp/mount-s3.deb \
  && rm /tmp/mount-s3.deb
 
-# Isolated venv so pip install works without PEP 668 tripping.
-# Prepend venv bin to PATH; make `python` an alias for the venv python.
-ENV VENV=/opt/venv
-RUN python3 -m venv $VENV \
- && ln -sf $VENV/bin/python $VENV/bin/python3 \
- && ln -sf $VENV/bin/python /usr/local/bin/python
-ENV PATH="$VENV/bin:$PATH"
+# Isolated venv at /opt/venv. Prepend to PATH so `python` and `pip` come
+# from the venv. Also symlink /usr/local/bin/python for good measure.
+ENV VIRTUAL_ENV=/opt/venv
+RUN python3 -m venv $VIRTUAL_ENV \
+ && ln -sf $VIRTUAL_ENV/bin/python /usr/local/bin/python \
+ && ln -sf $VIRTUAL_ENV/bin/python3 /usr/local/bin/python3
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
-# Pre-install the AgentCore CodeInterpreter library set + a few extras
-# useful for document / data workflows.
-RUN pip install --upgrade pip setuptools wheel \
- && pip install \
+# Pre-install the AgentCore CodeInterpreter library set + a few extras.
+# Use explicit venv paths so this doesn't rely on PATH resolution during
+# the RUN (belt-and-braces).
+RUN /opt/venv/bin/pip install --upgrade pip setuptools wheel \
+ && /opt/venv/bin/pip install \
       numpy pandas scipy scikit-learn statsmodels \
       matplotlib seaborn plotly \
       pillow \

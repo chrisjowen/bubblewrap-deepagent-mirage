@@ -8,7 +8,7 @@ dependencies = [
     "uvicorn[standard]>=0.32.0",
     "fastmcp>=2.0.0",
     "mirage-ai[s3]>=0.0.5",
-    "boto3>=1.40.61",
+    "boto3>=1.42",
     "pyyaml>=6.0.2",
     "pydantic>=2.9.0",
     "python-dotenv>=1.0.0",
@@ -25,6 +25,17 @@ dev = [
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+# mirage-ai[s3] → aioboto3 pins boto3 < 1.40.62, but AgentCore
+# CodeInterpreter's filesystemConfigurations field requires a newer
+# boto3. Force-override the transitive constraint. Newer boto3s are
+# API-compatible with the aiobotocore/aioboto3 surface mirage uses.
+[tool.uv]
+override-dependencies = [
+    "boto3>=1.42",
+    "botocore>=1.42",
+    "aiobotocore>=2.30",
+]
 
 [build-system]
 requires = ["hatchling"]
