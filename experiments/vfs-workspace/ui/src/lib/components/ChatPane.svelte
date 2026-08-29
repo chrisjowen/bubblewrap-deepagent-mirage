@@ -6,7 +6,9 @@
 	}
 
 	interface ChatSession {
-		id: string;
+		id: string; // client-side chat id
+		backend_session_id: string | null; // server-side workspace session
+		runtime: string | null;
 		title: string;
 		created_at: number;
 		messages: ChatMsg[];
@@ -21,6 +23,7 @@
 	let activeId = $state<string | null>(null);
 	let input = $state('');
 	let busy = $state(false);
+	let starting = $state(false);
 	let error = $state<string | null>(null);
 	let loaded = false;
 
@@ -48,23 +51,49 @@
 		} catch {}
 	}
 
-	function newSession(): ChatSession {
-		const s: ChatSession = {
-			id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-			title: 'New session',
-			created_at: Date.now(),
-			messages: []
-		};
-		sessions = [s, ...sessions];
-		activeId = s.id;
-		persistSessions();
-		return s;
+	async function newSession() {
+		starting = true;
+		error = null;
+		try {
+			const res = await fetch('/api/session', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ action: 'start' })
+			});
+			if (!res.ok) throw new Error(`session start: HTTP ${res.status}`);
+			const body = await res.json();
+			if (body.error) throw new Error(String(body.error));
+			const s: ChatSession = {
+				id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+				backend_session_id: String(body.session_id),
+				runtime: String(body.runtime ?? ''),
+				title: 'New session',
+				created_at: Date.now(),
+				messages: []
+			};
+			sessions = [s, ...sessions];
+			activeId = s.id;
+			persistSessions();
+		} catch (e) {
+			error = String(e);
+		} finally {
+			starting = false;
+		}
 	}
 
-	function deleteSession(id: string) {
-		sessions = sessions.filter((s) => s.id !== id);
+	async function deleteSession(id: string) {
+		const s = sessions.find((x) => x.id === id);
+		if (!s) return;
+		sessions = sessions.filter((x) => x.id !== id);
 		if (activeId === id) activeId = sessions[0]?.id ?? null;
 		persistSessions();
+		if (s.backend_session_id) {
+			fetch('/api/session', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ action: 'stop', session_id: s.backend_session_id })
+			}).catch(() => undefined);
+		}
 	}
 
 	function selectSession(id: string) {
@@ -74,7 +103,10 @@
 
 	function updateTitle(session: ChatSession) {
 		const firstUser = session.messages.find((m) => m.role === 'user');
-		if (firstUser) session.title = firstUser.text.slice(0, 40) + (firstUser.text.length > 40 ? '…' : '');
+		if (firstUser) {
+			session.title =
+				firstUser.text.slice(0, 40) + (firstUser.text.length > 40 ? '…' : '');
+		}
 	}
 
 	$effect(() => {
@@ -85,7 +117,7 @@
 	});
 
 	async function send() {
-		if (!input.trim() || busy || !active) return;
+		if (!input.trim() || busy || !active || !active.backend_session_id) return;
 		error = null;
 		busy = true;
 		const userMsg: ChatMsg = { role: 'user', text: input.trim() };
@@ -98,11 +130,16 @@
 		persistSessions();
 
 		try {
-			const wire = active.messages.slice(0, -1).map((m) => ({ role: m.role, content: m.text }));
+			const wire = active.messages
+				.slice(0, -1)
+				.map((m) => ({ role: m.role, content: m.text }));
 			const res = await fetch('/api/chat', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ workspaceId, messages: wire })
+				body: JSON.stringify({
+					messages: wire,
+					session_id: active.backend_session_id
+				})
 			});
 			if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
 
@@ -166,21 +203,32 @@
 		</select>
 		<button
 			onclick={() => newSession()}
-			title="New session"
-			class="rounded bg-neutral-800 px-2 py-1 text-xs hover:bg-neutral-700"
+			disabled={starting}
+			title="New session (spawns a fresh workspace session)"
+			class="rounded bg-neutral-800 px-2 py-1 text-xs hover:bg-neutral-700 disabled:opacity-50"
 		>
-			+ New
+			{starting ? '…' : '+ New'}
 		</button>
 		{#if active && sessions.length > 1}
 			<button
 				onclick={() => active && deleteSession(active.id)}
-				title="Delete current session"
+				title="Delete current session (stops workspace session)"
 				class="rounded bg-neutral-800 px-2 py-1 text-xs hover:bg-red-900"
 			>
 				×
 			</button>
 		{/if}
 	</div>
+
+	{#if active}
+		<div class="mb-2 flex items-center gap-2 text-[10px] font-mono opacity-60">
+			<span>session:</span>
+			<code>{active.backend_session_id ?? '(pending)'}</code>
+			{#if active.runtime}
+				<span class="rounded bg-neutral-800 px-1.5 py-0.5">{active.runtime}</span>
+			{/if}
+		</div>
+	{/if}
 
 	<div class="flex-1 overflow-y-auto space-y-3 pr-1 min-h-0">
 		{#if active}
@@ -198,7 +246,9 @@
 											({Object.keys((t.input as Record<string, unknown>) ?? {}).join(', ')})
 										</span>
 									</summary>
-									<pre class="mt-1 text-[10px] opacity-70 whitespace-pre-wrap">{JSON.stringify(t.input, null, 2)}</pre>
+									<pre
+										class="mt-1 text-[10px] opacity-70 whitespace-pre-wrap"
+									>{JSON.stringify(t.input, null, 2)}</pre>
 									{#if t.result}
 										<pre
 											class="mt-1 text-[10px] whitespace-pre-wrap {t.is_error ? 'text-red-400' : ''}"
@@ -225,12 +275,15 @@
 			bind:value={input}
 			onkeydown={keydown}
 			rows="3"
-			placeholder="Message (⌘/Ctrl+Enter to send)"
-			class="flex-1 rounded border border-neutral-700 bg-neutral-900 p-2 font-mono text-xs"
+			placeholder={active?.backend_session_id
+				? 'Message (⌘/Ctrl+Enter to send)'
+				: 'Waiting for session…'}
+			disabled={!active?.backend_session_id}
+			class="flex-1 rounded border border-neutral-700 bg-neutral-900 p-2 font-mono text-xs disabled:opacity-50"
 		></textarea>
 		<button
 			onclick={send}
-			disabled={busy || !active}
+			disabled={busy || !active?.backend_session_id}
 			class="rounded bg-blue-600 px-3 py-1 text-xs font-medium hover:bg-blue-500 disabled:opacity-50 self-end"
 		>
 			{busy ? '…' : 'Send'}

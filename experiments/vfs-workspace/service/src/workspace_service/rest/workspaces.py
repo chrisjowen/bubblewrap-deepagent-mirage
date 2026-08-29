@@ -16,14 +16,16 @@ def build_router(manager: WorkspaceManager, current_user_dep) -> APIRouter:
     def open_ws(workspace_id: str, user: str = Depends(current_user_dep)):
         if workspace_id != user:
             raise HTTPException(status_code=403, detail="not your workspace")
-        manager.get_or_open(user)
+        # No-op: sessions are managed via MCP start_session; opening the
+        # workspace itself just confirms the user + runtime.
         return {"status": "open", "runtime": manager.runtime_for(user)}
 
     @router.post("/{workspace_id}/close")
     def close_ws(workspace_id: str, user: str = Depends(current_user_dep)):
         if workspace_id != user:
             raise HTTPException(status_code=403, detail="not your workspace")
-        manager.close(user)
+        for sid in list(manager.list_sessions(user)):
+            manager.stop_session(user, sid)
         return {"status": "closed"}
 
     return router

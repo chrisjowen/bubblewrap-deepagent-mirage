@@ -1,8 +1,8 @@
-"""Minimal tests for config loader + auth + WorkspaceManager caching."""
+"""Config loader + auth + SessionManager caching."""
 
 import textwrap
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Depends, FastAPI
@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from workspace_service.auth import make_current_user_dep
 from workspace_service.config import UserSpec, WorkspacesConfig, load_config
-from workspace_service.workspaces import WorkspaceManager
+from workspace_service.workspaces import SessionManager
 
 
 CFG_YAML = textwrap.dedent("""
@@ -47,8 +47,7 @@ def test_auth_missing_header_401():
     def _w(u: str = Depends(make_current_user_dep(_cfg()))):
         return {"u": u}
 
-    r = TestClient(app).get("/w")
-    assert r.status_code == 401
+    assert TestClient(app).get("/w").status_code == 401
 
 
 def test_auth_unknown_user_403():
@@ -58,8 +57,7 @@ def test_auth_unknown_user_403():
     def _w(u: str = Depends(make_current_user_dep(_cfg()))):
         return {"u": u}
 
-    r = TestClient(app).get("/w", headers={"X-User-Id": "bogus"})
-    assert r.status_code == 403
+    assert TestClient(app).get("/w", headers={"X-User-Id": "bogus"}).status_code == 403
 
 
 def test_auth_known_user_passes():
@@ -70,33 +68,34 @@ def test_auth_known_user_passes():
         return {"u": u}
 
     r = TestClient(app).get("/w", headers={"X-User-Id": "chris"})
-    assert r.status_code == 200
-    assert r.json() == {"u": "chris"}
+    assert r.status_code == 200 and r.json() == {"u": "chris"}
 
 
-def test_workspace_manager_caches():
-    with patch("workspace_service.workspaces._build_workspace") as build:
-        build.return_value = MagicMock()
-        mgr = WorkspaceManager(_cfg())
-        w1 = mgr.get_or_open("chris")
-        w2 = mgr.get_or_open("chris")
-        assert w1 is w2
-        assert build.call_count == 1
+@pytest.mark.asyncio
+async def test_session_manager_lifecycle():
+    with patch("workspace_service.workspaces.build_session") as build:
+        interp = MagicMock()
+        interp.start = AsyncMock()
+        interp.stop = AsyncMock()
+        interp.runtime = "docker-local"
+        build.return_value = interp
+
+        mgr = SessionManager(_cfg())
+        s1 = await mgr.start_session("chris")
+        s2 = await mgr.start_session("chris")
+        assert s1.session_id != s2.session_id
+        assert set(mgr.list_sessions("chris")) == {s1.session_id, s2.session_id}
+
+        assert mgr.get_session("chris", s1.session_id) is s1
+        assert mgr.get_session("chris", "bogus") is None
+
+        await mgr.stop_session("chris", s1.session_id)
+        assert mgr.list_sessions("chris") == [s2.session_id]
+        interp.stop.assert_awaited()
 
 
-def test_workspace_manager_close_evicts():
-    with patch("workspace_service.workspaces._build_workspace") as build:
-        ws = MagicMock()
-        build.return_value = ws
-        mgr = WorkspaceManager(_cfg())
-        mgr.get_or_open("chris")
-        mgr.close("chris")
-        ws.close.assert_called_once()
-        mgr.get_or_open("chris")
-        assert build.call_count == 2
-
-
-def test_workspace_manager_unknown_user_raises():
-    mgr = WorkspaceManager(_cfg())
+@pytest.mark.asyncio
+async def test_session_manager_unknown_user_raises():
+    mgr = SessionManager(_cfg())
     with pytest.raises(KeyError):
-        mgr.get_or_open("bogus")
+        await mgr.start_session("bogus")
