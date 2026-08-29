@@ -1,8 +1,13 @@
 """Single global FastMCP at /mcp.
 
-All tools resolve caller from the X-User-Id header (set into a contextvar
-by the /mcp middleware in main.py). Session lifecycle + execute tools
-verify session ownership.
+Two families of tools:
+- File IO (session-less) — routed through Mirage. read/write/delete/ls.
+- Session lifecycle + code/command execution — routed through the
+  CodeInterpreter abstraction (docker-local or aws code-interpreter).
+  Session tools verify caller ownership.
+
+Caller is resolved from X-User-Id via contextvar populated by the /mcp
+auth middleware in main.py.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ from typing import Literal
 from fastapi import HTTPException
 from fastmcp import FastMCP
 
+from workspace_service.mirage_io import is_dir
 from workspace_service.session_ctx import current_user_id
 from workspace_service.workspaces import SessionManager
 
@@ -27,45 +33,65 @@ def _require_user() -> str:
 def build_mcp(manager: SessionManager) -> FastMCP:
     mcp = FastMCP("vfs-workspace")
 
-    # --- file IO (no session; hits caller's S3 prefix directly) ---
+    # --- Mirage-backed file IO (no session) ---
 
     @mcp.tool
-    def read(file_path: str) -> dict:
-        """Read a file from the caller's workspace."""
-        data, err = manager.s3io(_require_user()).read(file_path)
-        if err is not None:
-            return {"error": err}
+    async def read(file_path: str) -> dict:
+        """Read a file from the caller's Mirage workspace."""
+        io = manager.file_io(_require_user())
+        rc, data, err = await io.cat(file_path)
+        if rc != 0:
+            return {"error": err.decode(errors="replace") or "read failed"}
         try:
             return {"content": data.decode("utf-8")}
         except UnicodeDecodeError:
             return {"content_b64": base64.b64encode(data).decode()}
 
     @mcp.tool
-    def write(file_path: str, content: str) -> dict:
-        """Write a file to the caller's workspace."""
-        err = manager.s3io(_require_user()).write(file_path, content.encode("utf-8"))
-        return {"error": err} if err else {"path": file_path}
+    async def write(file_path: str, content: str) -> dict:
+        """Write a file to the caller's Mirage workspace."""
+        io = manager.file_io(_require_user())
+        rc, _, err = await io.tee(file_path, content.encode("utf-8"))
+        if rc != 0:
+            return {"error": err.decode(errors="replace") or "write failed"}
+        return {"path": file_path}
 
     @mcp.tool
-    def delete(file_path: str) -> dict:
-        """Delete a file from the caller's workspace."""
-        err = manager.s3io(_require_user()).delete(file_path)
-        return {"error": err} if err else {"path": file_path}
+    async def delete(file_path: str) -> dict:
+        """Delete a file from the caller's Mirage workspace."""
+        io = manager.file_io(_require_user())
+        rc, _, err = await io.rm(file_path)
+        if rc != 0:
+            return {"error": err.decode(errors="replace") or "delete failed"}
+        return {"path": file_path}
 
     @mcp.tool
-    def ls(path: str = "/") -> dict:
-        """List entries under a directory in the caller's workspace."""
-        entries = [
-            {"path": e.path, "is_dir": e.is_dir, "size": e.size}
-            for e in manager.s3io(_require_user()).ls(path)
-        ]
-        return {"entries": entries}
+    async def ls(path: str = "/") -> dict:
+        """List directory entries in the caller's Mirage workspace."""
+        io = manager.file_io(_require_user())
+        try:
+            entries = await io.readdir(path)
+        except Exception as exc:
+            return {"error": str(exc)}
+        out = []
+        for mp in entries:
+            virtual = io.virtual_path(mp) or "/"
+            try:
+                st = await io.stat(virtual)
+            except Exception:
+                st = None
+            out.append({
+                "path": virtual,
+                "is_dir": is_dir(st) if st else virtual.endswith("/"),
+                "size": getattr(st, "size", None) if st else None,
+            })
+        return {"entries": out}
 
-    # --- session lifecycle (caller-owned) ---
+    # --- session lifecycle ---
 
     @mcp.tool
     async def start_session() -> dict:
-        """Start a new interpreter session for the caller."""
+        """Start a new code interpreter session for the caller."""
         uid = _require_user()
         try:
             session = await manager.start_session(uid)
@@ -87,7 +113,7 @@ def build_mcp(manager: SessionManager) -> FastMCP:
         """List the caller's active session ids."""
         return {"session_ids": manager.list_sessions(_require_user())}
 
-    # --- execute (session-scoped, ownership-checked) ---
+    # --- code / command execution (session-scoped, ownership-checked) ---
 
     @mcp.tool
     async def execute_code(
@@ -96,25 +122,25 @@ def build_mcp(manager: SessionManager) -> FastMCP:
         language: Literal["python", "node", "bash"] = "python",
         clear_context: bool = False,
     ) -> dict:
-        """Run inline code in the named session's interpreter."""
+        """Run inline code in the session's interpreter (AWS: executeCode)."""
         session = _require_own_session(manager, session_id)
         if isinstance(session, dict):
             return session
-        result = await session.interpreter.execute_code(code, language, clear_context)
-        return _result_dict(result)
+        return _result_dict(
+            await session.interpreter.execute_code(code, language, clear_context)
+        )
 
     @mcp.tool
     async def execute_command(session_id: str, command: str) -> dict:
-        """Run a shell command in the named session's interpreter."""
+        """Run a shell command in the session (AWS: executeCommand)."""
         session = _require_own_session(manager, session_id)
         if isinstance(session, dict):
             return session
-        result = await session.interpreter.execute_command(command)
-        return _result_dict(result)
+        return _result_dict(await session.interpreter.execute_command(command))
 
     @mcp.tool
     async def start_command_execution(session_id: str, command: str) -> dict:
-        """Start a long-running command; returns a task_id."""
+        """Start a long-running command; returns a task_id (AWS: startCommandExecution)."""
         session = _require_own_session(manager, session_id)
         if isinstance(session, dict):
             return session
@@ -126,7 +152,7 @@ def build_mcp(manager: SessionManager) -> FastMCP:
 
     @mcp.tool
     async def get_task(session_id: str, task_id: str) -> dict:
-        """Fetch status + captured output of a task."""
+        """Fetch status + captured output of a task (AWS: getTask)."""
         session = _require_own_session(manager, session_id)
         if isinstance(session, dict):
             return session
@@ -142,7 +168,7 @@ def build_mcp(manager: SessionManager) -> FastMCP:
 
     @mcp.tool
     async def stop_task(session_id: str, task_id: str) -> dict:
-        """Cancel a running task."""
+        """Cancel a running task (AWS: stopTask)."""
         session = _require_own_session(manager, session_id)
         if isinstance(session, dict):
             return session

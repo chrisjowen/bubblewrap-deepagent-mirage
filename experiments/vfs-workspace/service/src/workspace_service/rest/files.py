@@ -2,35 +2,49 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
-from workspace_service.workspaces import WorkspaceManager
+from workspace_service.mirage_io import is_dir
+from workspace_service.workspaces import SessionManager
 
 
-def build_router(manager: WorkspaceManager, current_user_dep) -> APIRouter:
+def build_router(manager: SessionManager, current_user_dep) -> APIRouter:
     router = APIRouter(prefix="/workspaces", tags=["files"])
 
     @router.get("/{workspace_id}/tree")
-    def tree(workspace_id: str, path: str = "/",
-             user: str = Depends(current_user_dep)):
+    async def tree(workspace_id: str, path: str = "/",
+                   user: str = Depends(current_user_dep)):
         if workspace_id != user:
             raise HTTPException(403, "not your workspace")
-        io = manager.s3io(user)
-        entries = [
-            {"path": e.path, "is_dir": e.is_dir, "size": e.size}
-            for e in io.ls(path)
-        ]
-        return {"entries": entries}
+        io = manager.file_io(user)
+        try:
+            entries = await io.readdir(path)
+        except Exception as exc:
+            raise HTTPException(500, f"readdir failed: {exc}")
+        out = []
+        for mp in entries:
+            virtual = io.virtual_path(mp) or "/"
+            try:
+                st = await io.stat(virtual)
+            except Exception:
+                st = None
+            out.append({
+                "path": virtual,
+                "is_dir": is_dir(st) if st else virtual.endswith("/"),
+                "size": getattr(st, "size", None) if st else None,
+            })
+        return {"entries": out}
 
     @router.get("/{workspace_id}/files/{file_path:path}")
-    def read(workspace_id: str, file_path: str,
-             user: str = Depends(current_user_dep)):
+    async def read(workspace_id: str, file_path: str,
+                   user: str = Depends(current_user_dep)):
         if workspace_id != user:
             raise HTTPException(403, "not your workspace")
-        data, err = manager.s3io(user).read(file_path)
-        if err is not None:
-            raise HTTPException(404, err)
+        io = manager.file_io(user)
+        rc, data, err = await io.cat(file_path)
+        if rc != 0:
+            raise HTTPException(404, err.decode(errors="replace") or "not found")
         try:
-            text = data.decode("utf-8")
-            return Response(content=text, media_type="text/plain; charset=utf-8")
+            return Response(content=data.decode("utf-8"),
+                            media_type="text/plain; charset=utf-8")
         except UnicodeDecodeError:
             return Response(content=data, media_type="application/octet-stream")
 
@@ -39,20 +53,22 @@ def build_router(manager: WorkspaceManager, current_user_dep) -> APIRouter:
                     user: str = Depends(current_user_dep)):
         if workspace_id != user:
             raise HTTPException(403, "not your workspace")
+        io = manager.file_io(user)
         body = await request.body()
-        err = manager.s3io(user).write(file_path, body)
-        if err is not None:
-            raise HTTPException(500, err)
+        rc, _, err = await io.tee(file_path, body)
+        if rc != 0:
+            raise HTTPException(500, err.decode(errors="replace") or "write failed")
         return Response(status_code=204)
 
     @router.delete("/{workspace_id}/files/{file_path:path}", status_code=204)
-    def delete(workspace_id: str, file_path: str,
-               user: str = Depends(current_user_dep)):
+    async def delete(workspace_id: str, file_path: str,
+                     user: str = Depends(current_user_dep)):
         if workspace_id != user:
             raise HTTPException(403, "not your workspace")
-        err = manager.s3io(user).delete(file_path)
-        if err is not None:
-            raise HTTPException(500, err)
+        io = manager.file_io(user)
+        rc, _, err = await io.rm(file_path)
+        if rc != 0:
+            raise HTTPException(500, err.decode(errors="replace") or "delete failed")
         return Response(status_code=204)
 
     return router

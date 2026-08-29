@@ -1,10 +1,12 @@
 """Common shape for a code interpreter session.
 
-Mirrors the AWS Bedrock AgentCore CodeInterpreter API so a local Docker
-sandbox and the remote AWS service are drop-in interchangeable behind
-one interface. Every implementation exposes the same tool surface
-(executeCode / executeCommand / startCommandExecution / getTask /
-stopTask) even if a concrete backend fakes some of them.
+Session-scoped execution surface, mirroring AWS Bedrock AgentCore
+CodeInterpreter's invoke_code_interpreter tool set: executeCode,
+executeCommand, startCommandExecution, getTask, stopTask.
+
+File operations are NOT part of this abstraction — they live on the
+Mirage workspace layer (session-less, always available), which is
+distinct from the interpreter runtime.
 """
 
 from __future__ import annotations
@@ -54,6 +56,7 @@ class CodeInterpreterSession(Protocol):
     async def start(self) -> None: ...
     async def stop(self) -> None: ...
 
+    # code / shell
     async def execute_code(
         self,
         code: str,
@@ -63,9 +66,7 @@ class CodeInterpreterSession(Protocol):
 
     async def execute_command(self, command: str) -> ExecResult: ...
 
-    async def start_command_execution(self, command: str) -> str:
-        """Kick off a detached command; return task_id."""
-        ...
-
+    # async long-running command
+    async def start_command_execution(self, command: str) -> str: ...
     async def get_task(self, task_id: str) -> Task: ...
     async def stop_task(self, task_id: str) -> None: ...

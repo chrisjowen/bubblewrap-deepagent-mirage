@@ -1,8 +1,8 @@
-"""REST smoke — file browse via direct S3 (S3IO mocked)."""
+"""REST smoke — file browse via Mirage-backed IO (MirageIO mocked)."""
 
 import textwrap
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,29 +18,36 @@ CFG = textwrap.dedent("""
 """).strip()
 
 
-class FakeS3IO:
+class FakeMirageIO:
     def __init__(self):
         self.files: dict[str, bytes] = {"hello.txt": b"hello"}
+        self.mount = "/disk"
 
-    def read(self, path):
+    def virtual_path(self, mirage: str) -> str:
+        return mirage[len(self.mount):] if mirage.startswith(self.mount) else mirage
+
+    async def readdir(self, path="/"):
+        return [f"/disk/{name}" for name in self.files]
+
+    async def stat(self, path):
+        st = MagicMock()
+        st.type = "FILE"
+        st.size = len(self.files.get(path.lstrip("/"), b""))
+        return st
+
+    async def cat(self, path):
         data = self.files.get(path.lstrip("/"))
         if data is None:
-            return None, "not found"
-        return data, None
+            return (1, b"", b"not found")
+        return (0, data, b"")
 
-    def write(self, path, data):
+    async def tee(self, path, data):
         self.files[path.lstrip("/")] = data
-        return None
+        return (0, b"", b"")
 
-    def delete(self, path):
+    async def rm(self, path):
         self.files.pop(path.lstrip("/"), None)
-        return None
-
-    def ls(self, path="/"):
-        from code_interpreter.protocol import ExecResult  # dummy import to keep types loaded
-        _ = ExecResult
-        for name in self.files:
-            yield MagicMock(path="/" + name, is_dir=False, size=len(self.files[name]))
+        return (0, b"", b"")
 
 
 @pytest.fixture
@@ -48,9 +55,9 @@ def client(tmp_path: Path, monkeypatch):
     (tmp_path / "workspaces.yaml").write_text(CFG)
     monkeypatch.setenv("WORKSPACES_YAML", str(tmp_path / "workspaces.yaml"))
 
+    fake_io = FakeMirageIO()
     from workspace_service import workspaces as ws_mod
-    fake_io = FakeS3IO()
-    monkeypatch.setattr(ws_mod.SessionManager, "s3io", lambda self, uid: fake_io)
+    monkeypatch.setattr(ws_mod.SessionManager, "file_io", lambda self, uid: fake_io)
 
     from workspace_service.main import create_app
     with TestClient(create_app()) as c:

@@ -73,7 +73,7 @@ def test_auth_known_user_passes():
 
 @pytest.mark.asyncio
 async def test_session_manager_lifecycle():
-    with patch("workspace_service.workspaces.build_session") as build:
+    with patch("workspace_service.workspaces.build_interpreter") as build:
         interp = MagicMock()
         interp.start = AsyncMock()
         interp.stop = AsyncMock()
