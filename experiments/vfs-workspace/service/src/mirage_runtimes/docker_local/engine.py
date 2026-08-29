@@ -46,6 +46,11 @@ class DockerLocalEngine:
             for k, v in _aws_env_from_host().items():
                 env_flags.extend(["-e", f"{k}={v}"])
 
+        vol_flags: list[str] = []
+        home_aws = os.path.expanduser("~/.aws")
+        if os.path.isdir(home_aws):
+            vol_flags.extend(["-v", f"{home_aws}:/root/.aws:ro"])
+
         cmd = [
             "docker", "run", "-d", "--rm",
             "--name", self._container_name,
@@ -53,6 +58,7 @@ class DockerLocalEngine:
             "--device", "/dev/fuse",
             "--security-opt", "apparmor:unconfined",
             *env_flags,
+            *vol_flags,
             self._config.image,
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)

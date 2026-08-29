@@ -90,11 +90,11 @@ vfs-clean: ## kill stray mirage-runtime containers
 
 .PHONY: check-aws
 check-aws:
-	@if [ -z "$${AWS_ACCESS_KEY_ID:-}" ] && [ -z "$${AWS_PROFILE:-}" ]; then \
-	    printf '\033[31mAWS creds not set: export AWS_PROFILE or AWS_ACCESS_KEY_ID/SECRET/REGION\033[0m\n' >&2; \
+	@if [ -z "$${AWS_ACCESS_KEY_ID:-}" ] && [ -z "$${AWS_PROFILE:-}" ] && [ ! -f "$$HOME/.aws/credentials" ]; then \
+	    printf '\033[31mAWS creds not found: set AWS_PROFILE / AWS_ACCESS_KEY_ID / SECRET / REGION, or run `aws configure`\033[0m\n' >&2; \
 	    exit 1; \
 	fi
-	@printf '\033[36maws: %s region=%s\033[0m\n' "$${AWS_PROFILE:-<explicit keys>}" "$${AWS_REGION:-$${AWS_DEFAULT_REGION:-unset}}"
+	@printf '\033[36maws: %s region=%s\033[0m\n' "$${AWS_PROFILE:-$$( [ -f $$HOME/.aws/credentials ] && echo '~/.aws' || echo '<explicit keys>')}" "$${AWS_REGION:-$${AWS_DEFAULT_REGION:-$$(aws configure get region 2>/dev/null || echo unset)}}"
 
 .PHONY: check-ports
 check-ports: check-service-port check-ui-port
