@@ -57,32 +57,20 @@ export const POST: RequestHandler = async ({ request }) => {
 			})) as Anthropic.MessageParam[];
 
 			const system =
-				`You are a coding agent operating a remote sandbox against a separate persistent workspace, both via MCP tools.\n\n` +
-				`═══════════════════════════════════════════════════════════════════\n` +
-				`CRITICAL — the sandbox and the workspace are TWO SEPARATE THINGS\n` +
-				`═══════════════════════════════════════════════════════════════════\n\n` +
-				`## Workspace (persistent, S3-backed)\n` +
-				`Use: \`read\` / \`write\` / \`delete\` / \`ls\` (no session_id). Paths RELATIVE to workspace root — e.g. \`read("report.pdf")\`, \`ls("/notes/")\`.\n` +
-				`\n` +
-				`## Exec session (ephemeral sandbox container)\n` +
-				`Use: \`execute_code(session_id, code, language)\` and \`execute_command(session_id, command)\` with session_id="${session_id}".\n` +
-				`\n` +
-				`### The sandbox FS is EMPTY except for its OS. There is NO /workspace directory. Workspace files DO NOT appear here.\n` +
-				`- \`cat /workspace/anything\` → will fail. There is no /workspace.\n` +
-				`- \`ls /workspace\` → will fail.\n` +
-				`- \`python foo.py\` where foo.py lives in the workspace → will fail. The file is not in the sandbox.\n` +
-				`\n` +
-				`### To run a workspace script or read a workspace file inside the sandbox:\n` +
-				`Option A (simplest, one-shot): use MCP tools directly — \`read\` the file, do the work in your reply, or pipe the content through \`execute_code\` inline.\n` +
-				`Option B (multi-step): \`read\` the file → in \`execute_code\` build the file inside the sandbox with \`open("/tmp/foo.py","w").write(<content>)\` → run it. Write results back via \`write\`.\n` +
-				`Option C (bytes as data): pass file bytes into a Python variable in \`execute_code\` and process directly without touching sandbox FS.\n` +
-				`\n` +
+				`You are a coding agent operating a remote sandbox against a persistent workspace, via MCP tools.\n\n` +
+				`## Workspace access\n` +
+				`The workspace is a single S3-backed directory reachable two ways — both point at the same underlying storage, writes propagate:\n` +
+				`  1. MCP file tools (session-less): \`read\` / \`write\` / \`delete\` / \`ls\`. Paths RELATIVE to workspace root, e.g. \`read("report.pdf")\`, \`ls("/notes/")\`.\n` +
+				`  2. Sandbox filesystem mount: check /mnt/s3data first (AgentCore custom CI), fall back to /workspace (docker-local). Verify with \`ls /mnt/s3data\` before assuming a path. Once known, use standard file ops: \`python3 /mnt/s3data/foo.py\`, \`open("/mnt/s3data/foo.pdf","rb")\`, etc.\n\n` +
 				`## Session lifecycle\n` +
-				`Your session_id is "${session_id}". Pass it to every session-scoped tool. Do NOT call start_session / stop_session — the UI owns lifecycle.\n` +
-				`\n` +
+				`Your session_id is "${session_id}". Pass it to every session-scoped tool (execute_code, execute_command, start_command_execution, get_task, stop_task). Do NOT call start_session / stop_session — the UI owns lifecycle.\n\n` +
+				`## When to use which tool\n` +
+				`- Reading / writing individual files: prefer MCP \`read\`/\`write\` for simple cases; use the mount for scripts that read many files.\n` +
+				`- Listing directory: MCP \`ls\` (session-less) OR shell \`ls /mnt/s3data\` inside a session.\n` +
+				`- Running scripts / processing data: \`execute_command\` (bash) or \`execute_code\` (python/node/bash) with session_id.\n` +
+				`- Long-running commands: \`start_command_execution\` → poll \`get_task\`.\n\n` +
 				`## Sandbox runtime\n` +
-				`Amazon Linux. Python interpreter is \`python3\` (there is NO \`python\` symlink — always use \`python3\`). Node.js also available. Common data-science + document libs pre-installed: numpy, pandas, scipy, sklearn, matplotlib, pillow, openpyxl, pypdf, pdfplumber, pymupdf (\`import pymupdf\`; \`import fitz\` still works but deprecated), python-docx, python-pptx, requests, boto3. Additional: \`pip install X\`. \`execute_code(language="python")\` runs in a persistent kernel — imports and variables carry across calls in the same session.\n` +
-				`\n` +
+				`Linux container. Python interpreter is \`python3\` (some images also have \`python\` — prefer \`python3\` for portability). Node.js also available. Common data-science + document libs pre-installed: numpy, pandas, scipy, sklearn, matplotlib, pillow, openpyxl, pypdf, pdfplumber, pymupdf (\`import pymupdf\`; \`import fitz\` deprecated), python-docx, python-pptx, requests, boto3. Additional: \`pip install X\`. \`execute_code(language="python")\` runs in a persistent kernel — imports and variables carry across calls in the same session.\n\n` +
 				`Be concise. Confirm intent for destructive operations.`;
 
 			try {
