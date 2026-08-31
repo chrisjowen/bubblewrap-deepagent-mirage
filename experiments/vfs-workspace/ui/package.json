@@ -4,7 +4,7 @@
 	"version": "0.0.1",
 	"type": "module",
 	"scripts": {
-		"dev": "vite dev",
+		"dev": "env -u ANTHROPIC_API_KEY -u CHAT_MODEL vite dev",
 		"build": "vite build",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
@@ -16,6 +16,7 @@
 		"@sveltejs/kit": "^2.63.0",
 		"@sveltejs/vite-plugin-svelte": "^7.1.2",
 		"@tailwindcss/vite": "^4.3.3",
+		"@types/node": "^26.4.0",
 		"svelte": "^5.56.1",
 		"svelte-check": "^4.6.0",
 		"tailwindcss": "^4.3.3",
@@ -24,6 +25,14 @@
 	},
 	"dependencies": {
 		"@anthropic-ai/sdk": "^0.122.0",
-		"@modelcontextprotocol/sdk": "^1.30.0"
+		"@modelcontextprotocol/sdk": "^1.30.0",
+		"@tiptap/core": "^3.30.5",
+		"@tiptap/extension-code-block-lowlight": "^3.30.5",
+		"@tiptap/pm": "^3.30.5",
+		"@tiptap/starter-kit": "^3.30.5",
+		"dotenv": "^17.4.2",
+		"lowlight": "^3.3.0",
+		"marked": "^18.0.11",
+		"tiptap-markdown": "^0.9.0"
 	}
 }

@@ -8,9 +8,17 @@
         "agentcore",
         "astream",
         "bedrock",
+        "boto",
         "checkpointer",
         "deepagents",
+        "eksctl",
+        "fastapi",
+        "langchain",
         "langgraph",
-        "mirage"
+        "mirage",
+        "pyproject",
+        "PYTHONDONTWRITEBYTECODE",
+        "PYTHONUNBUFFERED",
+        "uvicorn"
     ]
 }

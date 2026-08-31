@@ -1,28 +1,70 @@
 # Copy to service/workspaces.yaml and edit for your setup.
 # Auth: X-User-Id header only for Phase 0 (no OIDC).
+#
+# Layout:
+#   users:      auth membership (X-User-Id must match a key)
+#   workspaces: selectable workspaces in the UI (owner + storage + runtime)
+#   runtimes:   config blocks for each registered runtime adapter
+
 users:
   chris:
-    s3_bucket: mirage-test-chris
-    s3_region: ap-southeast-1
-    s3_prefix: workspaces/chris
+    label: Chris
+
+workspaces:
+  docs-docker:
+    owner: chris
+    label: "Docs (docker)"
     runtime: docker-local
-    mount_name: disk
+    mount_name: docs
+    storage:
+      bucket: mirage-test-chris
+      region: ap-southeast-1
+      prefix: workspaces/chris/docs
+
+  docs-ci:
+    owner: chris
+    label: "Docs (AgentCore CI)"
+    runtime: code-interpreter
+    mount_name: docs
+    storage:
+      bucket: mirage-test-chris
+      region: ap-southeast-1
+      prefix: workspaces/chris/docs
+
+  code-docker:
+    owner: chris
+    label: "Code (docker)"
+    runtime: docker-local
+    mount_name: code
+    storage:
+      bucket: mirage-test-chris
+      region: ap-southeast-1
+      prefix: workspaces/chris/code
+
+  code-ci:
+    owner: chris
+    label: "Code (AgentCore CI)"
+    runtime: code-interpreter
+    mount_name: code
+    storage:
+      bucket: mirage-test-chris
+      region: ap-southeast-1
+      prefix: workspaces/chris/code
 
 runtimes:
   docker-local:
     image: mirage-runtime:latest
     aws_env_forwarding: true
+    # startup_timeout_seconds: 15.0
+    # mount_dir: /workspace   # inside-container mount path
+
   code-interpreter:
     region: us-east-1
-    # Use the built-in identifier for a session without mounts, or a
-    # custom identifier (arn / id) from `aws bedrock-agentcore-control
-    # create-code-interpreter` for a session with VPC + filesystem mounts.
+    # Built-in identifier: no mounts / no custom IAM.
+    # Use a custom identifier from `aws bedrock-agentcore-control
+    # create-code-interpreter` if you need VPC + filesystem mounts.
     code_interpreter_identifier: aws.codeinterpreter.v1
     session_timeout_seconds: 900
-    # Optional: mount S3 Files / EFS access points into the sandbox.
-    # Requires a custom code_interpreter_identifier created with
-    # networkMode: VPC and an execution role with s3files:ClientMount
-    # (or elasticfilesystem:ClientMount). See docs/agentcore-filesystem.md.
     # filesystem_configurations:
     #   - s3FilesConfiguration:
     #       accessPointArn: arn:aws:s3files:us-east-1:ACCOUNT:file-system/FS_ID/access-point/AP_ID

@@ -4,6 +4,8 @@ import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+	// Read .env from monorepo root so a single .env powers all sub-apps.
+	envDir: '../../../',
 	plugins: [
 		tailwindcss(),
 		sveltekit({

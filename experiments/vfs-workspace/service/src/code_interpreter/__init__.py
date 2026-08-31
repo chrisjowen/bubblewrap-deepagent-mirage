@@ -1,7 +1,10 @@
-"""CodeInterpreter package — one interface, docker + aws implementations."""
+"""CodeInterpreter port + adapters.
 
-from code_interpreter.aws import AwsCodeInterpreter, AwsConfig
-from code_interpreter.docker import DockerCodeInterpreter, DockerConfig
+Import order matters: adapter modules self-register on import, so we
+import them here so the registry is populated by the time callers do
+`from code_interpreter import build`.
+"""
+
 from code_interpreter.protocol import (
     CodeInterpreterSession,
     ExecResult,
@@ -10,29 +13,13 @@ from code_interpreter.protocol import (
     Task,
     TaskStatus,
 )
-from workspace_service.config import UserSpec
+from code_interpreter.registry import StorageBinding, build, known, register
 
-
-def build(user: UserSpec, runtime_spec: dict) -> CodeInterpreterSession:
-    """Factory: pick docker or aws implementation based on the user's config."""
-    name = user.runtime
-    if name == "docker-local":
-        cfg = DockerConfig(
-            s3_bucket=user.s3_bucket,
-            s3_prefix=user.s3_prefix,
-            image=runtime_spec.get("image", "mirage-runtime:latest"),
-            aws_env_forwarding=runtime_spec.get("aws_env_forwarding", True),
-        )
-        return DockerCodeInterpreter(config=cfg)
-    if name == "code-interpreter":
-        cfg = AwsConfig(
-            region=runtime_spec.get("region", user.s3_region),
-            code_interpreter_identifier=runtime_spec["code_interpreter_identifier"],
-            session_timeout_seconds=runtime_spec.get("session_timeout_seconds", 900),
-            filesystem_configurations=runtime_spec.get("filesystem_configurations"),
-        )
-        return AwsCodeInterpreter(config=cfg)
-    raise ValueError(f"unknown runtime: {name}")
+# Side-effect imports: adapters register into the registry at import.
+from code_interpreter import aws as _aws  # noqa: F401
+from code_interpreter import docker as _docker  # noqa: F401
+from code_interpreter.aws import AwsCodeInterpreter, AwsConfig
+from code_interpreter.docker import DockerCodeInterpreter, DockerConfig
 
 
 __all__ = [
@@ -44,7 +31,10 @@ __all__ = [
     "ExecResult",
     "Language",
     "SessionInfo",
+    "StorageBinding",
     "Task",
     "TaskStatus",
     "build",
+    "known",
+    "register",
 ]

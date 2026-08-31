@@ -202,6 +202,25 @@ class DockerCodeInterpreter(CodeInterpreterSession):
         except Exception:
             pass
 
+    async def wait_task(
+        self,
+        task_id: str,
+        timeout_s: float = 60.0,
+        initial_interval_s: float = 0.25,
+        max_interval_s: float = 2.0,
+    ) -> Task:
+        deadline = asyncio.get_event_loop().time() + timeout_s
+        interval = max(0.05, initial_interval_s)
+        while True:
+            t = await self.get_task(task_id)
+            if t.status in ("succeeded", "failed", "cancelled"):
+                return t
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                return t
+            await asyncio.sleep(min(interval, remaining))
+            interval = min(max_interval_s, interval * 2)
+
     # --- internals ---
 
     async def _exec(self, argv: list[str]) -> ExecResult:
@@ -219,3 +238,24 @@ class DockerCodeInterpreter(CodeInterpreterSession):
             exit_code=proc.returncode if proc.returncode is not None else 1,
             execution_time_ms=int((time.monotonic() - started) * 1000),
         )
+
+
+# --- adapter registration ---
+
+from code_interpreter.registry import StorageBinding, register  # noqa: E402
+
+
+def _build_docker(storage: StorageBinding, spec) -> "DockerCodeInterpreter":
+    return DockerCodeInterpreter(
+        config=DockerConfig(
+            s3_bucket=storage.bucket,
+            s3_prefix=storage.prefix,
+            image=spec.get("image", "mirage-runtime:latest"),
+            aws_env_forwarding=spec.get("aws_env_forwarding", True),
+            startup_timeout_seconds=float(spec.get("startup_timeout_seconds", 15.0)),
+            mount_dir=spec.get("mount_dir", "/workspace"),
+        )
+    )
+
+
+register("docker-local", _build_docker)

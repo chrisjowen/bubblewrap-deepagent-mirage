@@ -45,6 +45,7 @@ class AwsCodeInterpreter(CodeInterpreterSession):
     _client: Any = field(default=None, init=False)
     _session_id: str = field(default_factory=lambda: f"aws-{uuid4().hex[:12]}")
     _remote_id: str | None = field(default=None, init=False)
+    _invoke_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
 
     def __post_init__(self) -> None:
         self._client = boto3.client("bedrock-agentcore", region_name=self.config.region)
@@ -114,6 +115,26 @@ class AwsCodeInterpreter(CodeInterpreterSession):
     async def stop_task(self, task_id: str) -> None:
         await self._invoke_raw("stopTask", {"taskId": task_id})
 
+    async def wait_task(
+        self,
+        task_id: str,
+        timeout_s: float = 60.0,
+        initial_interval_s: float = 1.0,
+        max_interval_s: float = 8.0,
+    ) -> Task:
+        deadline = asyncio.get_event_loop().time() + timeout_s
+        interval = max(0.1, initial_interval_s)
+        last: Task | None = None
+        while True:
+            last = await self.get_task(task_id)
+            if last.status in ("succeeded", "failed", "cancelled"):
+                return last
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                return last
+            await asyncio.sleep(min(interval, remaining))
+            interval = min(max_interval_s, interval * 2)
+
     # --- internals ---
 
     async def _invoke_raw(self, name: str, arguments: dict) -> list[dict]:
@@ -129,7 +150,8 @@ class AwsCodeInterpreter(CodeInterpreterSession):
             )
             return list(resp["stream"])
 
-        return await asyncio.to_thread(_call)
+        async with self._invoke_lock:
+            return await asyncio.to_thread(_call)
 
     async def _invoke(self, name: str, arguments: dict) -> ExecResult:
         stream = await self._invoke_raw(name, arguments)
@@ -157,6 +179,27 @@ def _parse_exec(stream: list[dict]) -> ExecResult:
                 msg = (event[k] or {}).get("message", k)
                 return ExecResult(stdout="", stderr=msg, exit_code=1)
     return ExecResult(stdout=stdout, stderr=stderr, exit_code=exit_code, execution_time_ms=exec_ms)
+
+
+# --- adapter registration ---
+
+from code_interpreter.registry import StorageBinding, register  # noqa: E402
+
+
+def _build_aws(storage: StorageBinding, spec) -> "AwsCodeInterpreter":
+    return AwsCodeInterpreter(
+        config=AwsConfig(
+            region=spec.get("region", storage.region),
+            code_interpreter_identifier=spec.get(
+                "code_interpreter_identifier", "aws.codeinterpreter.v1"
+            ),
+            session_timeout_seconds=int(spec.get("session_timeout_seconds", 900)),
+            filesystem_configurations=spec.get("filesystem_configurations"),
+        )
+    )
+
+
+register("code-interpreter", _build_aws)
 
 
 def _parse_task(task_id: str, stream: list[dict]) -> Task:

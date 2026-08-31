@@ -15,17 +15,19 @@ from workspace_service.rest.exec import build_router as build_exec_router
 from workspace_service.rest.files import build_router as build_files_router
 from workspace_service.rest.workspaces import build_router as build_workspaces_router
 from workspace_service.session_ctx import current_user_id
-from workspace_service.workspaces import SessionManager
+from workspace_service.session_manager import SessionManager
+from workspace_service.workspace_registry import WorkspaceRegistry
 
 
 def create_app() -> FastAPI:
     config_path = Path(os.environ.get("WORKSPACES_YAML", "./workspaces.yaml"))
     config = load_config(config_path)
-    manager = SessionManager(config)
+    registry = WorkspaceRegistry(config)
+    manager = SessionManager(registry)
     current_user_dep = make_current_user_dep(config)
 
-    mcp = build_mcp(manager)
-    mcp_app = mcp.http_app(path="/")  # sub-app serves at its root; mounted below at /mcp
+    mcp = build_mcp(registry, manager)
+    mcp_app = mcp.http_app(path="/")
 
     @asynccontextmanager
     async def lifespan(app_: FastAPI):
@@ -49,7 +51,6 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def _mcp_user_ctx(request, call_next):
-        """For /mcp/* requests: validate X-User-Id, set contextvar."""
         if request.url.path.startswith("/mcp"):
             user = request.headers.get("x-user-id")
             if not user:
@@ -67,12 +68,13 @@ def create_app() -> FastAPI:
     def health():
         return {"status": "ok"}
 
-    app.include_router(build_workspaces_router(manager, current_user_dep))
-    app.include_router(build_files_router(manager, current_user_dep))
-    app.include_router(build_exec_router(manager, current_user_dep))
+    app.include_router(build_workspaces_router(registry, manager, current_user_dep))
+    app.include_router(build_files_router(registry, current_user_dep))
+    app.include_router(build_exec_router())
 
     app.mount("/mcp", mcp_app)
 
+    app.state.registry = registry
     app.state.manager = manager
     app.state.config = config
     return app

@@ -1,10 +1,7 @@
-import { env as privEnv } from '$env/dynamic/private';
+import '$lib/server/env';
 import Anthropic from '@anthropic-ai/sdk';
 import { openMcp } from '$lib/mcp';
 import type { RequestHandler } from './$types';
-
-const ANTHROPIC_KEY = privEnv.ANTHROPIC_API_KEY;
-const MODEL = privEnv.CHAT_MODEL ?? 'claude-opus-4-7';
 
 interface ChatMessage {
 	role: 'user' | 'assistant';
@@ -21,7 +18,43 @@ function toAnthropicTools(list: { tools: McpTool[] }): Anthropic.Tool[] {
 	}));
 }
 
+function buildSystemPrompt(opts: {
+	workspaceId: string;
+	sessionId: string;
+	runtime: string;
+	mountName: string;
+}): string {
+	const { workspaceId, sessionId, runtime, mountName } = opts;
+
+	const mountLine =
+		runtime === 'docker-local'
+			? `A local docker container mounts the workspace S3 folder at \`/workspace\` inside the sandbox (mountpoint-s3). Use it for scripts that touch many files: \`ls /workspace\`, \`python3 /workspace/foo.py\`.`
+			: `The AWS AgentCore Code Interpreter sandbox may or may not expose a filesystem mount depending on how the interpreter was created. If a mount exists it is typically \`/mnt/s3data\` — verify with \`ls /mnt/s3data\` before using. If no mount, use the MCP file tools exclusively.`;
+
+	return (
+		`You are a coding agent operating a persistent workspace.\n\n` +
+		`## Identity\n` +
+		`- workspace_id: "${workspaceId}"  (mount_name: "/${mountName}")\n` +
+		`- session_id: "${sessionId}"\n` +
+		`- runtime: ${runtime}\n\n` +
+		`Every MCP tool call REQUIRES workspace_id="${workspaceId}". Session-scoped tools ` +
+		`ALSO require session_id="${sessionId}". Do NOT call start_session / stop_session — the UI owns lifecycle.\n\n` +
+		`## File access (two paths, same S3 folder)\n` +
+		`1. MCP file tools (session-less): \`read(workspace_id, file_path)\` / \`write\` / \`delete\` / \`ls\`. Paths are relative to the workspace root: \`read(workspace_id="${workspaceId}", file_path="report.pdf")\`.\n` +
+		`2. Sandbox filesystem mount: ${mountLine}\n\n` +
+		`## Execution\n` +
+		`- Inline code: \`execute_code(workspace_id, session_id, code, language)\` — for python this is a PERSISTENT kernel (imports/vars survive across calls in this session).\n` +
+		`- Quick shell: \`execute_command(workspace_id, session_id, command)\`.\n` +
+		`- Long-running (installs, big scripts): \`start_command_execution\` → \`wait_task(workspace_id, session_id, task_id, timeout_s=60)\`. wait_task blocks server-side with backoff and returns partial state on timeout — if still running, call wait_task again. NEVER loop \`get_task\` yourself: repeated get_task calls burn per-session InvokeCodeInterpreter quota and fail with ServiceQuotaExceededException. get_task is for a single status peek only.\n\n` +
+		`## Runtime environment\n` +
+		`Linux container. Python is \`python3\`. Node.js available. Common data / doc libs preinstalled: numpy, pandas, scipy, sklearn, matplotlib, pillow, openpyxl, pypdf, pdfplumber, pymupdf (\`import pymupdf\`), python-docx, python-pptx, requests, boto3. Add more with \`pip install X\`.\n\n` +
+		`Be concise. Confirm intent for destructive operations.`
+	);
+}
+
 export const POST: RequestHandler = async ({ request }) => {
+	const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+	const MODEL = process.env.CHAT_MODEL ?? 'claude-haiku-4-5';
 	if (!ANTHROPIC_KEY) {
 		return new Response(JSON.stringify({ error: 'ANTHROPIC_API_KEY not set on server' }), {
 			status: 500,
@@ -31,11 +64,20 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	const {
 		messages,
-		session_id
-	}: { messages: ChatMessage[]; session_id: string } = await request.json();
+		workspace_id,
+		session_id,
+		runtime,
+		mount_name
+	}: {
+		messages: ChatMessage[];
+		workspace_id: string;
+		session_id: string;
+		runtime: string;
+		mount_name: string;
+	} = await request.json();
 
-	if (!session_id) {
-		return new Response(JSON.stringify({ error: 'session_id required' }), {
+	if (!workspace_id || !session_id) {
+		return new Response(JSON.stringify({ error: 'workspace_id and session_id required' }), {
 			status: 400,
 			headers: { 'Content-Type': 'application/json' }
 		});
@@ -56,22 +98,12 @@ export const POST: RequestHandler = async ({ request }) => {
 				content: m.content
 			})) as Anthropic.MessageParam[];
 
-			const system =
-				`You are a coding agent operating a remote sandbox against a persistent workspace, via MCP tools.\n\n` +
-				`## Workspace access\n` +
-				`The workspace is a single S3-backed directory reachable two ways — both point at the same underlying storage, writes propagate:\n` +
-				`  1. MCP file tools (session-less): \`read\` / \`write\` / \`delete\` / \`ls\`. Paths RELATIVE to workspace root, e.g. \`read("report.pdf")\`, \`ls("/notes/")\`.\n` +
-				`  2. Sandbox filesystem mount: check /mnt/s3data first (AgentCore custom CI), fall back to /workspace (docker-local). Verify with \`ls /mnt/s3data\` before assuming a path. Once known, use standard file ops: \`python3 /mnt/s3data/foo.py\`, \`open("/mnt/s3data/foo.pdf","rb")\`, etc.\n\n` +
-				`## Session lifecycle\n` +
-				`Your session_id is "${session_id}". Pass it to every session-scoped tool (execute_code, execute_command, start_command_execution, get_task, stop_task). Do NOT call start_session / stop_session — the UI owns lifecycle.\n\n` +
-				`## When to use which tool\n` +
-				`- Reading / writing individual files: prefer MCP \`read\`/\`write\` for simple cases; use the mount for scripts that read many files.\n` +
-				`- Listing directory: MCP \`ls\` (session-less) OR shell \`ls /mnt/s3data\` inside a session.\n` +
-				`- Running scripts / processing data: \`execute_command\` (bash) or \`execute_code\` (python/node/bash) with session_id.\n` +
-				`- Long-running commands: \`start_command_execution\` → poll \`get_task\`.\n\n` +
-				`## Sandbox runtime\n` +
-				`Linux container. Python interpreter is \`python3\` (some images also have \`python\` — prefer \`python3\` for portability). Node.js also available. Common data-science + document libs pre-installed: numpy, pandas, scipy, sklearn, matplotlib, pillow, openpyxl, pypdf, pdfplumber, pymupdf (\`import pymupdf\`; \`import fitz\` deprecated), python-docx, python-pptx, requests, boto3. Additional: \`pip install X\`. \`execute_code(language="python")\` runs in a persistent kernel — imports and variables carry across calls in the same session.\n\n` +
-				`Be concise. Confirm intent for destructive operations.`;
+			const system = buildSystemPrompt({
+				workspaceId: workspace_id,
+				sessionId: session_id,
+				runtime,
+				mountName: mount_name ?? ''
+			});
 
 			try {
 				while (true) {
@@ -87,7 +119,12 @@ export const POST: RequestHandler = async ({ request }) => {
 						if (block.type === 'text') {
 							send({ type: 'text', text: block.text });
 						} else if (block.type === 'tool_use') {
-							send({ type: 'tool_use', name: block.name, input: block.input });
+							send({
+								type: 'tool_use',
+								tool_use_id: block.id,
+								name: block.name,
+								input: block.input
+							});
 						}
 					}
 

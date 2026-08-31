@@ -20,9 +20,26 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
 	return ct.includes('application/json') ? res.json() : ((await res.text()) as unknown as T);
 }
 
+async function reqRaw(path: string, init: RequestInit = {}): Promise<Response> {
+	const res = await fetch(`${BASE}${path}`, {
+		...init,
+		headers: { 'X-User-Id': USER, ...(init.headers ?? {}) }
+	});
+	if (!res.ok) {
+		let detail = res.statusText;
+		try {
+			detail = (await res.text()) || detail;
+		} catch {}
+		throw new Error(`${res.status} ${detail}`);
+	}
+	return res;
+}
+
 export interface Workspace {
 	id: string;
+	label?: string;
 	runtime: string;
+	mount_name?: string;
 }
 export interface TreeEntry {
 	path: string;
@@ -36,14 +53,50 @@ export interface ExecResp {
 	elapsed_ms: number;
 }
 
+function filePath(id: string, path: string): string {
+	return `/workspaces/${id}/files/${path.replace(/^\//, '')}`;
+}
+
 export const api = {
 	listWorkspaces: () => req<Workspace[]>('/workspaces'),
 	openWorkspace: (id: string) =>
-		req<{ status: string; runtime: string }>(`/workspaces/${id}/open`, { method: 'POST' }),
-	tree: (id: string, path = '/') =>
-		req<{ entries: TreeEntry[] }>(`/workspaces/${id}/tree?path=${encodeURIComponent(path)}`),
-	readFile: (id: string, path: string) =>
-		req<string>(`/workspaces/${id}/files/${path.replace(/^\//, '')}`),
+		req<{ status: string; id: string; label: string; runtime: string; mount_name: string }>(
+			`/workspaces/${id}/open`,
+			{ method: 'POST' }
+		),
+	tree: (id: string, path = '/', refresh = false) =>
+		req<{ entries: TreeEntry[] }>(
+			`/workspaces/${id}/tree?path=${encodeURIComponent(path)}${refresh ? '&refresh=true' : ''}`
+		),
+	readFile: (id: string, path: string) => req<string>(filePath(id, path)),
+	readBlob: async (id: string, path: string): Promise<Blob> => {
+		const res = await reqRaw(filePath(id, path));
+		return res.blob();
+	},
+	writeFile: async (id: string, path: string, body: string | Blob | ArrayBuffer) => {
+		await reqRaw(filePath(id, path), {
+			method: 'PUT',
+			headers: { 'Content-Type': 'application/octet-stream' },
+			body: body as BodyInit
+		});
+	},
+	deleteFile: async (id: string, path: string) => {
+		await reqRaw(filePath(id, path), { method: 'DELETE' });
+	},
+	mkdir: async (id: string, path: string) => {
+		await reqRaw(`/workspaces/${id}/mkdir`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ path })
+		});
+	},
+	move: async (id: string, src: string, dst: string) => {
+		await reqRaw(`/workspaces/${id}/move`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ src, dst })
+		});
+	},
 	exec: (id: string, body: { language: 'python' | 'node'; code: string }) =>
 		req<ExecResp>(`/workspaces/${id}/exec`, {
 			method: 'POST',

@@ -78,6 +78,16 @@ class MirageIO:
     async def rm(self, path: str) -> tuple[int, bytes, bytes]:
         return await self.shell(f"rm -rf {shlex.quote(self.mount_path(path))}")
 
+    async def mkdir(self, path: str) -> tuple[int, bytes, bytes]:
+        return await self.shell(f"mkdir -p {shlex.quote(self.mount_path(path))}")
+
+    async def mv(self, src: str, dst: str) -> tuple[int, bytes, bytes]:
+        src_m = self.mount_path(src)
+        dst_m = self.mount_path(dst)
+        parent = dst_m.rsplit("/", 1)[0] or self._mount
+        await self.shell(f"mkdir -p {shlex.quote(parent)}")
+        return await self.shell(f"mv {shlex.quote(src_m)} {shlex.quote(dst_m)}")
+
     async def readdir(self, path: str = "/") -> list[str]:
         return await self._ws.readdir(self.mount_path(path))
 

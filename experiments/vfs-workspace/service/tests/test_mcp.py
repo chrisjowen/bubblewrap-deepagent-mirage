@@ -9,11 +9,16 @@ from fastapi.testclient import TestClient
 
 CFG = textwrap.dedent("""
     users:
-      chris:
-        s3_bucket: b
-        s3_region: r
-        s3_prefix: p
+      chris: {}
+    workspaces:
+      docs:
+        owner: chris
+        label: Docs
         runtime: docker-local
+        mount_name: docs
+        storage: {bucket: b, region: r, prefix: p}
+    runtimes:
+      docker-local: {}
 """).strip()
 
 
@@ -61,9 +66,9 @@ def test_mcp_tools_list(client):
     assert tools.status_code == 200
     body = tools.text
     for expected in (
-        "read", "write", "delete", "ls",
+        "list_workspaces", "read", "write", "delete", "ls",
         "start_session", "stop_session", "list_sessions",
         "execute_code", "execute_command",
-        "start_command_execution", "get_task", "stop_task",
+        "start_command_execution", "get_task", "stop_task", "wait_task",
     ):
         assert expected in body, f"missing tool: {expected}"
